@@ -51,6 +51,7 @@ fit = [
   "zeus-mcmc",
   "dynesty",
 ]
+sbi = ["sbi>=0.22.0", "torch>=2.0"]
 all = [
   "corner",
   "emcee",

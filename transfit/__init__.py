@@ -15,6 +15,8 @@ def __getattr__(name):
     if name == "plot":
         # Plotting stays optional until the user actually asks for it.
         return import_module(".modules.plot", __name__)
+    if name == "sbi":
+        return import_module(".sbi", __name__)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -26,4 +28,5 @@ __all__ = [
     "fit_bol", "fit_multiband",
     "save", "load", "default_outpath",
     "plot",
+    "sbi",
 ]
