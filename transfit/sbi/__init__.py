@@ -64,6 +64,7 @@ def train_sbi(
     training_batch_size: int = 50,
     max_num_epochs: int = 100,
     learning_rate: float = 5e-4,
+    device: Optional[str] = None,
     # Data generation
     n_workers: int = 1,
     seed: int = 42,
@@ -124,6 +125,9 @@ def train_sbi(
         Maximum training epochs.
     learning_rate : float
         Learning rate.
+    device : str, optional
+        Torch device for NPE training/inference ("cpu", "cuda", "cuda:0", ...).
+        Defaults to CUDA when available, otherwise CPU.
     n_workers : int
         Parallel workers for simulation.
     seed : int
@@ -147,6 +151,7 @@ def train_sbi(
 
     model = canonical_model_name(model, warn_legacy=False)
     z_val = float(z or 0.0)
+    train_device = _resolve_sbi_device(device)
 
     # ---- Build prior ----
     priors_lin, priors_log10 = _split_prior_specs(priors)
@@ -158,6 +163,7 @@ def train_sbi(
         bounds=bounds_samp, param_names=names_samp, log_flags=log_flags_samp
     )
     tf_prior = TransFitPrior(mixed_prior)
+    tf_prior_train = TransFitPrior(mixed_prior).to(train_device)
 
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
@@ -186,7 +192,9 @@ def train_sbi(
 
     # ---- Generate training data with variable cadences ----
     all_theta = []
-    all_x_encoded = []
+    all_x_raw = []
+    all_t_days = []
+    all_bands = [] if mode == "multiband" else None
 
     # Distribute simulations across cadence templates
     n_templates = len(cadence_templates)
@@ -233,25 +241,27 @@ def train_sbi(
             cache_path=None,
             show_progress=show_progress and t_idx == 0,
         )
-
-        # Encode observations
-        t_days_list = [t_days_tmpl] * len(theta_batch)
-        band_list = [band_tmpl] * len(theta_batch) if band_tmpl is not None else None
-
-        x_enc, _ = encode_batch(
-            [np.asarray(x_batch[i]) for i in range(len(x_batch))],
-            t_days_list=t_days_list,
-            band_list=band_list,
-            band_vocabulary=band_vocabulary,
-            t_range=t_range,
-        )
+        if len(theta_batch) == 0:
+            continue
 
         all_theta.append(theta_batch)
-        all_x_encoded.append(x_enc)
+        all_x_raw.extend(np.asarray(x_batch[i], float) for i in range(len(x_batch)))
+        all_t_days.extend([t_days_tmpl] * len(theta_batch))
+        if all_bands is not None:
+            all_bands.extend([band_tmpl] * len(theta_batch))
 
-    # Concatenate all training data
+    if not all_theta:
+        raise RuntimeError("No valid simulations produced. Check prior bounds and model parameters.")
+
+    # Concatenate all training data and pad variable-length cadences globally.
     theta_train = torch.cat(all_theta, dim=0)
-    x_train = torch.cat(all_x_encoded, dim=0)
+    x_train, _ = encode_batch(
+        all_x_raw,
+        t_days_list=all_t_days,
+        band_list=all_bands,
+        band_vocabulary=band_vocabulary,
+        t_range=t_range,
+    )
 
     # Filter NaN observations
     valid = torch.all(torch.isfinite(x_train.view(x_train.shape[0], -1)), dim=1)
@@ -270,6 +280,7 @@ def train_sbi(
             hidden_features=hidden_features,
             output_dim=hidden_features,
         )
+    embedding_net = embedding_net.to(train_device)
 
     # ---- Train NPE ----
     density_estimator = posterior_nn(
@@ -279,7 +290,12 @@ def train_sbi(
         num_transforms=num_transforms,
     )
 
-    inference = SNPE(prior=tf_prior, density_estimator=density_estimator)
+    inference = SNPE(
+        prior=tf_prior_train,
+        density_estimator=density_estimator,
+        device=str(train_device),
+        show_progress_bars=show_progress,
+    )
     inference.append_simulations(theta_train, x_train)
 
     density_estimator = inference.train(
@@ -291,7 +307,7 @@ def train_sbi(
 
     sbi_posterior = inference.build_posterior(density_estimator)
 
-    return SBIPosterior(
+    posterior = SBIPosterior(
         model=model,
         param_names=names_samp,
         posterior=sbi_posterior,
@@ -312,11 +328,14 @@ def train_sbi(
             "Ny": Ny,
             "t_max_days": t_max_days,
             "t_range": list(t_range),
+            "x_event_shape": list(x_train.shape[1:]),
+            "device": str(train_device),
         },
         band_vocabulary=band_vocabulary,
         t_range=t_range,
         mode=mode,
     )
+    return posterior.to(train_device)
 
 
 def infer_sbi(
@@ -377,6 +396,19 @@ def _generate_random_cadences(
         cadences.append(tmpl)
 
     return cadences
+
+
+def _resolve_sbi_device(device: Optional[str]) -> torch.device:
+    if device is None:
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    resolved = torch.device(device)
+    if resolved.type == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError(
+            f"CUDA device '{device}' was requested, but torch.cuda.is_available() is False. "
+            "Check the installed PyTorch CUDA build and the NVIDIA driver."
+        )
+    return resolved
 
 
 __all__ = [

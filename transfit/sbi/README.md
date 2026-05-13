@@ -31,10 +31,13 @@ posterior = tf.sbi.train_sbi(
     bands_pool=["B", "V"],
     n_simulations=5000,
     max_num_epochs=100,
+    device="cuda",  # optional: defaults to CUDA when available, else CPU
 )
 ```
 
 For bolometric light curves, use `mode="bolometric"` and omit `filters`, `bands_pool`, and `distance_modulus`.
+
+If you request `device="cuda"`, TransFit passes that through to `sbi.SNPE` and keeps inference tensors on the same device. CUDA still depends on your local PyTorch build and NVIDIA driver being compatible.
 
 ### Inference
 

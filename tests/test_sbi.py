@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -65,8 +66,9 @@ class TestPriorAdapter:
         samples = tf_prior.sample((500,))
         lo = mp.bounds[:, 0]
         hi = mp.bounds[:, 1]
-        np.testing.assert_array_less(np.asarray(samples), hi)
-        np.testing.assert_array_less(lo, np.asarray(samples))
+        samples_np = np.asarray(samples)
+        assert np.all(samples_np < hi)
+        assert np.all(lo < samples_np)
 
     def test_log_prob_in_bounds(self, tf_prior_nickel):
         prior, _, _, _ = tf_prior_nickel
@@ -477,6 +479,8 @@ class TestIO:
             assert loaded.model == "nickel"
             assert loaded.param_names == ["M_ej", "v_ej", "M_Ni"]
             assert loaded.mode == "bolometric"
+            assert loaded.posterior is None
+            assert loaded.meta["posterior_serialized"] is False
 
     def test_load_requires_trusted(self):
         with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as f:
@@ -487,3 +491,49 @@ class TestIO:
                 load_posterior(path)
         finally:
             os.unlink(path)
+
+
+class TestPosteriorDevice:
+
+    def test_sample_and_log_prob_follow_posterior_device(self):
+        emb = MLPEmbeddingNet(input_dim=6, hidden_features=16, output_dim=8)
+
+        class MockPosterior:
+            def __init__(self):
+                self.posterior_estimator = torch.nn.Linear(6, 3)
+                self.potential_fn = SimpleNamespace(
+                    posterior_estimator=self.posterior_estimator
+                )
+                self.x_devices = []
+                self.theta_devices = []
+
+            def sample(self, sample_shape, *, x, show_progress_bars=False):
+                self.x_devices.append(x.device.type)
+                return torch.zeros(
+                    (sample_shape[0], 3), dtype=torch.float32, device=x.device
+                )
+
+            def log_prob(self, theta, *, x):
+                self.x_devices.append(x.device.type)
+                self.theta_devices.append(theta.device.type)
+                return torch.zeros(theta.shape[0], dtype=torch.float32, device=theta.device)
+
+        mock = MockPosterior()
+        post = SBIPosterior(
+            model="nickel",
+            param_names=["M_ej", "v_ej", "M_Ni"],
+            posterior=mock,
+            embedding_net=emb,
+            mode="bolometric",
+        )
+
+        y_obs = np.array([42.5, 43.0, 42.8])
+        t_days = np.array([10.0, 20.0, 30.0])
+
+        samples = post.sample(5, y_obs, t_days=t_days)
+        lp = post.log_prob(np.ones((2, 3)), y_obs, t_days=t_days)
+
+        assert samples.shape == (5, 3)
+        assert lp.shape == (2,)
+        assert mock.x_devices == ["cpu", "cpu"]
+        assert mock.theta_devices == ["cpu"]
