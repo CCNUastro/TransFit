@@ -537,3 +537,42 @@ class TestPosteriorDevice:
         assert lp.shape == (2,)
         assert mock.x_devices == ["cpu", "cpu"]
         assert mock.theta_devices == ["cpu"]
+
+    def test_to_updates_nested_sbi_device_state(self):
+        emb = MLPEmbeddingNet(input_dim=3, hidden_features=16, output_dim=8)
+
+        class DummyPrior:
+            def __init__(self):
+                self.device = "cuda:0"
+
+            def to(self, device):
+                self.device = str(device)
+                return self
+
+        class MockPosterior:
+            def __init__(self):
+                self._device = "cuda:0"
+                self.device = "cuda:0"
+                self.prior = DummyPrior()
+                self.posterior_estimator = torch.nn.Linear(3, 3)
+                self.potential_fn = SimpleNamespace(
+                    device="cuda:0",
+                    prior=DummyPrior(),
+                    posterior_estimator=self.posterior_estimator,
+                )
+
+        post = SBIPosterior(
+            model="nickel",
+            param_names=["M_ej", "v_ej", "M_Ni"],
+            posterior=MockPosterior(),
+            embedding_net=emb,
+            mode="bolometric",
+        )
+
+        post.to("cpu")
+
+        assert post.posterior.device == "cpu"
+        assert post.posterior._device == "cpu"
+        assert post.posterior.prior.device == "cpu"
+        assert post.posterior.potential_fn.device == "cpu"
+        assert post.posterior.potential_fn.prior.device == "cpu"

@@ -81,7 +81,7 @@ def load_posterior(path: str, *, trusted: bool = False) -> SBIPosterior:
         # Backward compatibility for older .pt files that stored the object directly.
         sbi_posterior = state.get("sbi_posterior")
 
-    return SBIPosterior(
+    posterior = SBIPosterior(
         model=state["model"],
         param_names=state["param_names"],
         posterior=sbi_posterior,
@@ -91,6 +91,7 @@ def load_posterior(path: str, *, trusted: bool = False) -> SBIPosterior:
         t_range=tuple(state.get("t_range", (0.0, 150.0))),
         mode=state.get("mode", "multiband"),
     )
+    return posterior.to("cpu")
 
 
 def _serialize_sbi_posterior(posterior_obj: Any) -> bytes | None:

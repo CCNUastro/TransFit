@@ -12,6 +12,10 @@ pip install -e ".[sbi]"
 
 This installs `sbi>=0.22.0` and `torch>=2.0` alongside the core TransFit dependencies.
 
+For a dataset-backed walkthrough, see `examples/tutorial_sbi_sn1993j.ipynb`.
+That notebook trains a bolometric SBI posterior on `examples/data/sn1993j_lbol.txt`
+and demonstrates how to recover physical parameters from the observed light curve.
+
 ## Quick Start
 
 ### Training
@@ -36,6 +40,7 @@ posterior = tf.sbi.train_sbi(
 ```
 
 For bolometric light curves, use `mode="bolometric"` and omit `filters`, `bands_pool`, and `distance_modulus`.
+At inference time, bolometric observations should be passed in `log10(L)` space because the bolometric simulator is trained on log-luminosity targets.
 
 If you request `device="cuda"`, TransFit passes that through to `sbi.SNPE` and keeps inference tensors on the same device. CUDA still depends on your local PyTorch build and NVIDIA driver being compatible.
 

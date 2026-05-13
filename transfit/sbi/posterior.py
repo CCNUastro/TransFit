@@ -50,19 +50,42 @@ class SBIPosterior:
     def to(self, device: torch.device | str) -> "SBIPosterior":
         """Move the embedding network and underlying posterior estimator."""
         device = torch.device(device)
+        device_str = str(device)
 
         if isinstance(self.embedding_net, nn.Module):
             self.embedding_net.to(device)
+
+        if self.posterior is not None:
+            for attr in ("_device", "device"):
+                if hasattr(self.posterior, attr):
+                    try:
+                        setattr(self.posterior, attr, device_str)
+                    except Exception:
+                        pass
 
         posterior_module = self._posterior_estimator_module()
         if posterior_module is not None:
             posterior_module.to(device)
 
-        potential_module = getattr(
-            getattr(self.posterior, "potential_fn", None),
-            "posterior_estimator",
-            None,
-        )
+        potential_fn = getattr(self.posterior, "potential_fn", None)
+        if potential_fn is not None:
+            for attr in ("_device", "device"):
+                if hasattr(potential_fn, attr):
+                    try:
+                        setattr(potential_fn, attr, device_str)
+                    except Exception:
+                        pass
+
+        for prior_obj in (
+            getattr(self.posterior, "prior", None),
+            getattr(self.posterior, "_prior", None),
+            getattr(potential_fn, "prior", None),
+            getattr(potential_fn, "_prior", None),
+        ):
+            if prior_obj is not None and hasattr(prior_obj, "to"):
+                prior_obj.to(device)
+
+        potential_module = getattr(potential_fn, "posterior_estimator", None)
         if (
             isinstance(potential_module, nn.Module)
             and potential_module is not posterior_module
