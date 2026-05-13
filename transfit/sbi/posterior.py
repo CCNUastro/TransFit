@@ -10,6 +10,15 @@ import torch
 import torch.nn as nn
 
 
+def _module_device(module: Optional[nn.Module]) -> Optional[torch.device]:
+    if not isinstance(module, nn.Module):
+        return None
+    try:
+        return next(module.parameters()).device
+    except StopIteration:
+        return None
+
+
 @dataclass
 class SBIPosterior:
     """Trained SBI posterior, analogous to FitResult.
@@ -26,6 +35,41 @@ class SBIPosterior:
     band_vocabulary: Optional[List[str]] = None
     t_range: tuple = (0.0, 150.0)
     mode: str = "multiband"  # "bolometric" or "multiband"
+
+    @property
+    def device(self) -> torch.device:
+        for module in (
+            self._posterior_estimator_module(),
+            self.embedding_net if isinstance(self.embedding_net, nn.Module) else None,
+        ):
+            device = _module_device(module)
+            if device is not None:
+                return device
+        return torch.device("cpu")
+
+    def to(self, device: torch.device | str) -> "SBIPosterior":
+        """Move the embedding network and underlying posterior estimator."""
+        device = torch.device(device)
+
+        if isinstance(self.embedding_net, nn.Module):
+            self.embedding_net.to(device)
+
+        posterior_module = self._posterior_estimator_module()
+        if posterior_module is not None:
+            posterior_module.to(device)
+
+        potential_module = getattr(
+            getattr(self.posterior, "potential_fn", None),
+            "posterior_estimator",
+            None,
+        )
+        if (
+            isinstance(potential_module, nn.Module)
+            and potential_module is not posterior_module
+        ):
+            potential_module.to(device)
+
+        return self
 
     def sample(
         self,
@@ -58,10 +102,13 @@ class SBIPosterior:
         -------
         samples : np.ndarray, shape (n, ndim)
         """
+        posterior = self._require_posterior()
         x_encoded = self._encode_observation(y_obs, t_days=t_days, band=band)
         if seed is not None:
             torch.manual_seed(seed)
-        samples = self.posterior.sample(
+            if self.device.type == "cuda":
+                torch.cuda.manual_seed_all(seed)
+        samples = posterior.sample(
             (n,), x=x_encoded, show_progress_bars=False
         )
         return np.asarray(samples.detach().cpu().numpy(), float)
@@ -80,11 +127,12 @@ class SBIPosterior:
         -------
         log_prob : np.ndarray, shape (n_samples,)
         """
+        posterior = self._require_posterior()
         x_encoded = self._encode_observation(y_obs, t_days=t_days, band=band)
-        theta_t = torch.as_tensor(theta, dtype=torch.float32)
+        theta_t = torch.as_tensor(theta, dtype=torch.float32, device=self.device)
         if theta_t.dim() == 1:
             theta_t = theta_t.unsqueeze(0)
-        lp = self.posterior.log_prob(theta_t, x=x_encoded)
+        lp = posterior.log_prob(theta_t, x=x_encoded)
         return np.asarray(lp.detach().cpu().numpy(), float)
 
     def map_estimate(
@@ -136,6 +184,7 @@ class SBIPosterior:
         from .embedding import encode_observations, SetSummaryNet
 
         y_obs = np.asarray(y_obs, float).reshape(-1)
+        device = self.device
 
         if isinstance(self.embedding_net, SetSummaryNet):
             features, _ = encode_observations(
@@ -149,9 +198,11 @@ class SBIPosterior:
             validity = np.ones((features.shape[0], 1), dtype=np.float32)
             features_with_mask = np.concatenate([features, validity], axis=1)
             # Shape: (1, n_obs, feature_dim+1)
-            return torch.as_tensor(
-                features_with_mask[np.newaxis, :, :], dtype=torch.float32
-            )
+            return self._pad_encoded_observation(torch.as_tensor(
+                features_with_mask[np.newaxis, :, :],
+                dtype=torch.float32,
+                device=device,
+            ))
 
         if isinstance(self.embedding_net, nn.Module):
             features, _ = encode_observations(
@@ -162,9 +213,72 @@ class SBIPosterior:
                 t_range=self.t_range,
             )
             # Flatten to 1D: (1, n_obs * feature_dim)
-            return torch.as_tensor(
-                features.reshape(1, -1), dtype=torch.float32
-            )
+            return self._pad_encoded_observation(torch.as_tensor(
+                features.reshape(1, -1),
+                dtype=torch.float32,
+                device=device,
+            ))
 
         # Fallback: raw 1D
-        return torch.as_tensor(y_obs, dtype=torch.float32).unsqueeze(0)
+        return self._pad_encoded_observation(
+            torch.as_tensor(y_obs, dtype=torch.float32, device=device).unsqueeze(0)
+        )
+
+    def _require_posterior(self):
+        if self.posterior is None:
+            raise RuntimeError(
+                "This SBIPosterior does not include a serialized sbi posterior object. "
+                "It can be inspected, but it cannot sample or evaluate log_prob."
+            )
+        return self.posterior
+
+    def _posterior_estimator_module(self) -> Optional[nn.Module]:
+        posterior = self.posterior
+        if posterior is None:
+            return None
+
+        for candidate in (
+            getattr(posterior, "posterior_estimator", None),
+            getattr(posterior, "_posterior_estimator", None),
+            getattr(getattr(posterior, "potential_fn", None), "posterior_estimator", None),
+            getattr(getattr(posterior, "_potential_fn", None), "posterior_estimator", None),
+        ):
+            if isinstance(candidate, nn.Module):
+                return candidate
+        return None
+
+    def _pad_encoded_observation(self, x: torch.Tensor) -> torch.Tensor:
+        target_shape = self.meta.get("x_event_shape")
+        if target_shape is None:
+            return x
+
+        target = tuple(int(v) for v in target_shape)
+        actual = tuple(int(v) for v in x.shape[1:])
+        if actual == target:
+            return x
+
+        if len(target) == 2:
+            if actual[1] != target[1]:
+                raise RuntimeError(
+                    f"Encoded observation feature shape {actual} does not match trained feature shape {target}."
+                )
+            if actual[0] > target[0]:
+                raise RuntimeError(
+                    f"Observation has {actual[0]} epochs, but the trained SBI posterior expects at most {target[0]}."
+                )
+            padded = torch.zeros((x.shape[0], target[0], target[1]), dtype=x.dtype, device=x.device)
+            padded[:, :actual[0], :] = x
+            return padded
+
+        if len(target) == 1:
+            if actual[0] > target[0]:
+                raise RuntimeError(
+                    f"Encoded observation length {actual[0]} exceeds the trained SBI shape {target[0]}."
+                )
+            padded = torch.zeros((x.shape[0], target[0]), dtype=x.dtype, device=x.device)
+            padded[:, :actual[0]] = x
+            return padded
+
+        raise RuntimeError(
+            f"Unsupported trained SBI event shape {target}; expected a 1D or 2D event shape."
+        )
