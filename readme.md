@@ -20,6 +20,7 @@
 <p>
   <a href="examples/tutorial.ipynb">Tutorial Notebook</a> |
   <a href="examples/tutorial_zh.ipynb">Chinese Tutorial</a> |
+  <a href="examples/tutorial_sbi_sn1993j.ipynb">SBI Tutorial Notebook</a> |
   <a href="examples/data">Example Data</a> |
   <a href="#usage">Usage</a> |
   <a href="https://doi.org/10.3847/1538-4357/adfed6">Paper</a>
@@ -61,6 +62,11 @@ If you also want fitting backends and corner plots, install the optional extras:
 ```bash
 python -m pip install -e .[all]
 ```
+
+For the end-to-end SN 1993J amortized inference example, see
+`examples/tutorial_sbi_sn1993j.ipynb`. It trains an SBI posterior on the
+bolometric cadence from `examples/data/sn1993j_lbol.txt` and then infers
+physical parameters from those observations.
 
 ## Usage
 

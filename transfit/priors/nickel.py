@@ -24,7 +24,7 @@ NICKEL_PARAM_NAMES = [
 NICKEL_DEFAULT_BOUNDS = np.array([
     [0.1,    10.0],      # M_ej
     [0.1,     3.0],      # v_ej
-    [0.01,   10.0],      # E_Th_in
+    [0.0,    10.0],      # E_Th_in
     [0.001,   1.0],      # M_Ni
     [0.1,   500.0],      # R_0
     [0.0,     1.0],      # x_Ni
