@@ -392,8 +392,6 @@ loaded = tf.load(path)
 
 - [教程 notebook](../examples/tutorial.ipynb)
 - [API 和参数参考](api_reference.md)
-- [English API reference](api_reference.md)
-- [模型引用指南](https://github.com/YuHaoZhang01/TransFit/blob/main/docs/model_citations.md)
 
 ## 联系方式
 
@@ -409,11 +407,55 @@ loaded = tf.load(path)
 
 [![GitHub stars](https://img.shields.io/github/stars/YuHaoZhang01/TransFit?style=social&label=Stars)](https://github.com/YuHaoZhang01/TransFit/stargazers)
 
-如果你在科研工作中使用 TransFit，请引用 TransFit 论文。
-模型引用规则和 BibTeX 见 [模型引用指南](https://github.com/YuHaoZhang01/TransFit/blob/main/docs/model_citations.md)。
+如果你在科研工作中使用 TransFit，请引用 TransFit 论文：
+
+```bibtex
+@ARTICLE{2025ApJ...992...20L,
+       author = {{Liu}, Liang-Duan and {Zhang}, Yu-Hao and {Yu}, Yun-Wei and {Du}, Ze-Xin and {Li}, Jing-Yao and {Wu}, Guang-Lei and {Dai}, Zi-Gao},
+        title = "{TransFit: An Efficient Framework for Transient Light-curve Fitting with Time-dependent Radiative Diffusion}",
+      journal = {\apj},
+     keywords = {Supernovae, Radiative transfer, Core-collapse supernovae, Time domain astronomy, 1668, 1335, 304, 2109, High Energy Astrophysical Phenomena, Instrumentation and Methods for Astrophysics},
+         year = 2025,
+        month = oct,
+       volume = {992},
+       number = {1},
+          eid = {20},
+        pages = {20},
+          doi = {10.3847/1538-4357/adfed6},
+archivePrefix = {arXiv},
+       eprint = {2505.13825},
+ primaryClass = {astro-ph.HE},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2025ApJ...992...20L},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+```
+
+对于 `csm` 模型，还请引用：
+
+```bibtex
+@ARTICLE{2026ApJ...999..186Z,
+       author = {{Zhang}, Yu-Hao and {Liu}, Liang-Duan and {Du}, Ze-Xin and {Wu}, Guang-Lei and {Li}, Jing-Yao and {Yu}, Yun-Wei},
+        title = "{TransFit-CSM: A Fast, Physically Consistent Framework for Interaction-powered Transients}",
+      journal = {\apj},
+     keywords = {Core-collapse supernovae, Supernovae, Circumstellar matter, Stellar mass loss, 304, 1668, 241, 1613, High Energy Astrophysical Phenomena},
+         year = 2026,
+        month = mar,
+       volume = {999},
+       number = {2},
+          eid = {186},
+        pages = {186},
+          doi = {10.3847/1538-4357/ae434a},
+archivePrefix = {arXiv},
+       eprint = {2511.13265},
+ primaryClass = {astro-ph.HE},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2026ApJ...999..186Z},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+```
 
 ## 使用 TransFit 的论文
 
+- Ni et al., *Mapping the Dense Circumstellar Environments of SNe Ibn, SNe Icn, and Fast Blue Optical Transients*, arXiv e-print (2026), [arXiv:2607.00453](https://arxiv.org/abs/2607.00453)。
 - Yuan et al., *Thermal X-rays breaking out from pre-explosion ejecta of a dying massive star*, arXiv e-print (2026), [arXiv:2606.10014](https://arxiv.org/abs/2606.10014)。
 - Liu et al., *SN 2024igg: A Super-Chandrasekhar/03fg-like SN exhibiting C II-dominated spectra after explosion*, submitted to A&A (2026), [arXiv:2602.03427](https://arxiv.org/abs/2602.03427)。
 
