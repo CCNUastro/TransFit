@@ -119,7 +119,7 @@ def test_csm_time_grid_remains_strict_when_transition_rounds_past_end():
     assert np.all(np.diff(grid) > 0.0)
 
 
-def test_tau_photosphere_and_radiative_phases_follow_reference_strategy():
+def test_tau_photosphere_and_radiative_phases_retain_diffusion_cooling():
     result = CSMModel().calculate_light_curve(
         THETA,
         Nx=30,
@@ -150,8 +150,24 @@ def test_tau_photosphere_and_radiative_phases_follow_reference_strategy():
         result["R_ph"][following],
         params["R_in"] * result["x_sh"][following],
     )
-    assert np.allclose(result["R_ph"][cooling], result["R_out"][cooling])
+    cooling_thick = cooling & result["photosphere_optically_thick"]
+    expansion = result["expansion_factor"][cooling_thick]
+    tau_above_cooling = (
+        scales["tau_in"]
+        / expansion**2
+        * np.array(
+            [
+                _integral_power_law(x_ph, params["x_max"], -params["s"])
+                for x_ph in result["x_ph"][cooling_thick]
+            ]
+        )
+    )
+    assert np.allclose(tau_above_cooling, 2.0 / 3.0, rtol=2.0e-10)
+    assert np.all(result["R_ph"][cooling] <= result["R_out"][cooling])
     assert np.all(result["L_sh_heat_diffusion"][following] == 0.0)
+    assert np.allclose(
+        result["L_bol"][cooling], result["L_bol_diffusion"][cooling]
+    )
     assert np.all(result["radiative_phase_code"][diffusion] == 0)
     assert np.all(result["radiative_phase_code"][following] == 1)
     assert np.all(result["radiative_phase_code"][cooling] == 2)
@@ -167,13 +183,7 @@ def test_tau_photosphere_and_radiative_phases_follow_reference_strategy():
     ] == pytest.approx(
         result["breakout_diffusion_luminosity"], rel=1.0e-12
     )
-    last_following = np.flatnonzero(following)[-1]
-    first_cooling = np.flatnonzero(cooling)[0]
-    assert result["L_bol"][first_cooling] / result["L_bol"][
-        last_following
-    ] == pytest.approx(1.0, rel=0.08)
-    cooling_invariant = result["L_bol"][cooling] * result["R_ph"][cooling] ** 2
-    assert np.allclose(cooling_invariant, cooling_invariant[0], rtol=1.0e-10)
+    assert result["cooling_law"] == "source-free expanding Crank--Nicolson diffusion"
 
 
 def test_csm_nx100_ny1000_is_stable_against_twofold_refinement():

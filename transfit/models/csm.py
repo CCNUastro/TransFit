@@ -971,12 +971,11 @@ def _fast_pde_loop(
     return L_bol, e_hist
 
 
-def _compose_radiative_phases(t_s, L_diffusion, L_sh_heat, expansion_factor, shock):
-    """Join diffusion, shock-following, and post-CSM cooling continuously."""
+def _compose_radiative_phases(t_s, L_diffusion, L_sh_heat, shock):
+    """Combine direct shock emission with the original diffusion cooling."""
     t_s = np.asarray(t_s, dtype=float)
     L_diffusion = np.asarray(L_diffusion, dtype=float)
     L_sh_heat = np.asarray(L_sh_heat, dtype=float)
-    expansion_factor = np.asarray(expansion_factor, dtype=float)
 
     t_ph = float(shock["t_diff_end"])
     t_out = float(shock["t_end"])
@@ -1012,16 +1011,9 @@ def _compose_radiative_phases(t_s, L_diffusion, L_sh_heat, expansion_factor, sho
         shock_following_phase
     ]
 
-    if np.any(cooling_phase):
-        L_following_out = float(np.interp(t_out, t_s, matched_shock_following))
-        expansion_at_out = float(np.interp(t_out, t_s, expansion_factor))
-        relative_expansion = np.maximum(
-            expansion_factor[cooling_phase] / max(expansion_at_out, 1.0e-300),
-            1.0,
-        )
-        L_emergent[cooling_phase] = (
-            max(L_following_out, 0.0) / relative_expansion**2
-        )
+    # Once the shock leaves the CSM, retain the source-free expanding diffusion
+    # solution.  Do not replace it with an imposed luminosity power law.
+    L_emergent[cooling_phase] = L_diffusion_nonnegative[cooling_phase]
 
     phase_code = np.zeros(t_s.size, dtype=np.int8)
     phase_code[shock_following_phase] = 1
@@ -1036,8 +1028,33 @@ def _compose_radiative_phases(t_s, L_diffusion, L_sh_heat, expansion_factor, sho
         "breakout_diffusion_luminosity": L_diffusion_at_breakout,
         "breakout_shock_luminosity": L_sh_heat_at_breakout,
         "breakout_matching_excess": matching_excess,
-        "cooling_law": "homologous radiation cooling: R_ph~a, T~a^-1, L~a^-2",
+        "cooling_law": "source-free expanding Crank--Nicolson diffusion",
     }
+
+
+def _expanding_tau_photosphere(expansion_factor, p, scales):
+    """Return the moving tau=2/3 photosphere in the expanding CSM shell."""
+    expansion = np.maximum(np.asarray(expansion_factor, dtype=float), 1.0)
+    target_integral = (2.0 / 3.0) * expansion**2 / scales["tau_in"]
+    x_max = float(p["x_max"])
+
+    if abs(p["s"] - 1.0) < 1.0e-12:
+        x_ph = x_max * np.exp(-target_integral)
+    else:
+        exponent = 1.0 - p["s"]
+        x_power = x_max**exponent - exponent * target_integral
+        if exponent > 0.0:
+            x_power = np.maximum(x_power, 0.0)
+        else:
+            x_power = np.maximum(x_power, np.finfo(float).tiny)
+        x_ph = x_power ** (1.0 / exponent)
+
+    tau_total_expanding = scales["tau_total"] / expansion**2
+    optically_thick = tau_total_expanding > (2.0 / 3.0) * (1.0 + 1.0e-12)
+    x_ph = np.clip(x_ph, 1.0, x_max)
+    x_ph[~optically_thick] = 1.0
+    R_ph = p["R_in"] * expansion * x_ph
+    return R_ph, x_ph, tau_total_expanding, optically_thick
 
 
 def _photosphere(L_bol, expansion_factor, x_sh, radiative_phase_code, p, scales):
@@ -1047,17 +1064,36 @@ def _photosphere(L_bol, expansion_factor, x_sh, radiative_phase_code, p, scales)
     if p["photosphere_mode"] == "tau":
         phase_code = np.asarray(radiative_phase_code, dtype=np.int8)
         R_ph = np.full(L_pos.shape, scales["R_diff"], dtype=float)
+        x_ph = np.full(L_pos.shape, scales["x_diff_max"], dtype=float)
+        tau_total_expanding = np.full(L_pos.shape, scales["tau_total"], dtype=float)
+        photosphere_optically_thick = np.ones(L_pos.shape, dtype=bool)
         shock_following = phase_code == 1
         cooling = phase_code == 2
         R_ph[shock_following] = (
             p["R_in"] * np.asarray(x_sh, dtype=float)[shock_following]
         )
-        R_ph[cooling] = R_out[cooling]
+        x_ph[shock_following] = np.asarray(x_sh, dtype=float)[shock_following]
+        if np.any(cooling):
+            (
+                R_ph[cooling],
+                x_ph[cooling],
+                tau_total_expanding[cooling],
+                photosphere_optically_thick[cooling],
+            ) = _expanding_tau_photosphere(
+                np.asarray(expansion_factor, dtype=float)[cooling], p, scales
+            )
         T_eff = (
             L_pos
             / (4.0 * PI * SIGMA_SB * np.maximum(R_ph, 1.0e-300) ** 2)
         ) ** 0.25
-        return T_eff, R_ph, R_out
+        return (
+            T_eff,
+            R_ph,
+            R_out,
+            x_ph,
+            tau_total_expanding,
+            photosphere_optically_thick,
+        )
 
     T_surface = (L_pos / (4.0 * PI * SIGMA_SB * np.maximum(R_out, 1.0e-300) ** 2)) ** 0.25
     R_floor = np.sqrt(L_pos / (4.0 * PI * SIGMA_SB * p["T_floor"] ** 4))
@@ -1066,7 +1102,18 @@ def _photosphere(L_bol, expansion_factor, x_sh, radiative_phase_code, p, scales)
     R_ph = R_out.copy()
     R_ph[floor_active] = R_floor[floor_active]
     T_eff = (L_pos / (4.0 * PI * SIGMA_SB * np.maximum(R_ph, 1.0e-300) ** 2)) ** 0.25
-    return T_eff, R_ph, R_out
+    x_ph = R_ph / np.maximum(p["R_in"] * expansion_factor, 1.0e-300)
+    tau_total_expanding = scales["tau_total"] / np.maximum(
+        expansion_factor, 1.0
+    ) ** 2
+    return (
+        T_eff,
+        R_ph,
+        R_out,
+        x_ph,
+        tau_total_expanding,
+        np.ones(L_pos.shape, dtype=bool),
+    )
 
 
 class CSMModel:
@@ -1211,7 +1258,6 @@ class CSMModel:
                 t_s,
                 L_bol_diffusion,
                 sources["L_sh_heat_raw"],
-                expansion_factor,
                 shock,
             )
         else:
@@ -1233,7 +1279,14 @@ class CSMModel:
                 "cooling_law": "legacy outer-boundary diffusion",
             }
         L_bol = radiative_phases["L_bol"]
-        T_eff, R_ph, R_out = _photosphere(
+        (
+            T_eff,
+            R_ph,
+            R_out,
+            x_ph,
+            tau_total_expanding,
+            photosphere_optically_thick,
+        ) = _photosphere(
             L_bol,
             expansion_factor,
             x_sh,
@@ -1253,6 +1306,9 @@ class CSMModel:
         T_eff_out = T_eff[out]
         R_ph_out = R_ph[out]
         R_out_out = R_out[out]
+        x_ph_out = x_ph[out]
+        tau_total_expanding_out = tau_total_expanding[out]
+        photosphere_optically_thick_out = photosphere_optically_thick[out]
         x_sh_out = x_sh[out]
         z_sh_out = z_sh[out]
         w_sh_out = w_sh[out]
@@ -1278,6 +1334,9 @@ class CSMModel:
                 "T_eff": T_eff_out,
                 "R_ph": R_ph_out,
                 "R_out": R_out_out,
+                "x_ph": x_ph_out,
+                "tau_total_expanding": tau_total_expanding_out,
+                "photosphere_optically_thick": photosphere_optically_thick_out,
                 "x_sh": x_sh_out,
                 "z_sh": z_sh_out,
                 "w_sh": w_sh_out,
