@@ -6,9 +6,11 @@ import numpy as np
 # (M_ej, E_sn, M_csm, R_csm_out, kappa, s, eps_sh, T_floor)
 #
 # Backward compatibility:
-# - forward-model helpers allow s to be omitted.
+# - forward-model helpers allow s and T_floor to be omitted.
 # - R_csm_in, n, and delta are fixed to internal defaults in the public API.
 # - bolometric fitting treats T_floor as an internal numerical floor.
+# - tau-photosphere multiband fitting fixes T_floor because that mode derives
+#   temperature directly from the tau=2/3 photosphere radius.
 
 CSM_PARAM_NAMES = [
     "M_ej",        # Msun

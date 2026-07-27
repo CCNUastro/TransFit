@@ -4,6 +4,7 @@
 import numpy as np
 import numba
 from scipy.integrate import solve_ivp
+from transfit.exceptions import NonPhysicalModelError
 
 try:
     from transfit.modules.interp import interp_fit
@@ -51,6 +52,33 @@ def _integral_power_law(x_lo, x_hi, power):
     return float((x_hi ** (power + 1.0) - x_lo ** (power + 1.0)) / (power + 1.0))
 
 
+def _find_photosphere_x(p, rho_0, tau_target=2.0 / 3.0):
+    """Return the radius where the outward CSM optical depth is ``tau_target``."""
+    tau_scale = p["kappa"] * float(rho_0) * p["R_in"]
+    tau_total = tau_scale * _integral_power_law(
+        1.0, p["x_max"], -p["s"]
+    )
+    if tau_total <= tau_target * (1.0 + 1.0e-12):
+        raise NonPhysicalModelError(
+            "The CSM is optically thin: total radial optical depth "
+            f"{tau_total:.6g} does not enclose a diffusion region below "
+            f"the photosphere depth {tau_target:.6g}."
+        )
+
+    low = 1.0
+    high = float(p["x_max"])
+    for _ in range(72):
+        middle = 0.5 * (low + high)
+        tau_above = tau_scale * _integral_power_law(
+            middle, p["x_max"], -p["s"]
+        )
+        if tau_above > tau_target:
+            low = middle
+        else:
+            high = middle
+    return 0.5 * (low + high), float(tau_total)
+
+
 def _build_params(
     theta,
     Nx,
@@ -67,6 +95,7 @@ def _build_params(
     shock_rk_dx,
     shock_kernel_cells,
     shock_kernel_width_Rsun,
+    photosphere_mode,
 ):
     theta = tuple(theta)
     if len(theta) == 7:
@@ -129,6 +158,7 @@ def _build_params(
         "shock_rk_dx": float(shock_rk_dx),
         "shock_kernel_cells": int(shock_kernel_cells),
         "shock_kernel_width": float(shock_kernel_width_Rsun) * R_SUN,
+        "photosphere_mode": str(photosphere_mode).strip().lower(),
     }
     p["x_max"] = p["R_csm"] / p["R_in"]
     _validate_params(p)
@@ -137,7 +167,13 @@ def _build_params(
 
 def _validate_params(p):
     for name, value in p.items():
-        if name in {"N_x", "N_t", "shock_kernel_cells", "shock_ode_solver"}:
+        if name in {
+            "N_x",
+            "N_t",
+            "shock_kernel_cells",
+            "shock_ode_solver",
+            "photosphere_mode",
+        }:
             continue
         if not np.isfinite(float(value)):
             raise ValueError(f"{name} must be finite.")
@@ -165,6 +201,8 @@ def _validate_params(p):
         raise ValueError("shock_max_step must be positive.")
     if p["shock_ode_solver"] not in {"numba", "scipy"}:
         raise ValueError("shock_ode_solver must be 'numba' or 'scipy'.")
+    if p["photosphere_mode"] not in {"outer", "tau"}:
+        raise ValueError("photosphere_mode must be 'outer' or 'tau'.")
     if not (p["shock_rk_dx"] > 0.0):
         raise ValueError("shock_rk_dx must be positive.")
     if not (p["shock_kernel_cells"] >= 0):
@@ -178,7 +216,19 @@ def _compute_csm_scales(p):
     I_M_csm = _integral_power_law(1.0, x_max, 2.0 - p["s"])
     rho_0 = p["M_csm"] / (4.0 * PI * p["R_in"] ** 3 * I_M_csm)
     tau_in = p["kappa"] * rho_0 * p["R_in"]
-    t_d = 3.0 * p["kappa"] * rho_0 * p["R_csm"] ** 2 / C_LIGHT
+    tau_total = tau_in * _integral_power_law(1.0, x_max, -p["s"])
+    if p["photosphere_mode"] == "tau":
+        x_diff_max, tau_total = _find_photosphere_x(p, rho_0)
+    else:
+        x_diff_max = x_max
+    R_diff = p["R_in"] * x_diff_max
+    boundary_tau = 2.0 / 3.0 if p["photosphere_mode"] == "tau" else 0.0
+    eddington_extrapolation_tau = boundary_tau + 2.0 / 3.0
+    surface_flux_factor = 1.0 / (3.0 * eddington_extrapolation_tau)
+    beta_int = eddington_extrapolation_tau / (
+        tau_in * x_diff_max ** (-p["s"])
+    )
+    t_d = 3.0 * p["kappa"] * rho_0 * R_diff ** 2 / C_LIGHT
 
     zeta = (p["n"] - 3.0) * (3.0 - p["delta_inner"])
     zeta /= 4.0 * PI * (p["n"] - p["delta_inner"])
@@ -199,13 +249,19 @@ def _compute_csm_scales(p):
     A1 = rho_ej_tr / rho_0
 
     u0 = t_d * rho_0 * v_max ** 3 / (2.0 * p["R_in"])
-    beta_int = 2.0 * x_max ** p["s"] / (3.0 * tau_in)
     L0 = 4.0 * PI * C_LIGHT * p["R_in"] * u0 / (3.0 * p["kappa"] * rho_0)
 
     return {
         "I_M_csm": I_M_csm,
         "rho_0": rho_0,
         "tau_in": tau_in,
+        "tau_total": tau_total,
+        "tau_photosphere": boundary_tau,
+        "boundary_tau": boundary_tau,
+        "eddington_extrapolation_tau": eddington_extrapolation_tau,
+        "surface_flux_factor": surface_flux_factor,
+        "x_diff_max": x_diff_max,
+        "R_diff": R_diff,
         "t_d": t_d,
         "zeta": zeta,
         "f_v": f_v,
@@ -567,10 +623,59 @@ def _solve_shock_ode_scipy(p):
     }
 
 
+def _attach_diffusion_boundary_crossing(shock, p):
+    """Record when the forward shock crosses the tau-defined photosphere."""
+    scales = shock["scales"]
+    x_target = float(scales["x_diff_max"])
+    if np.isclose(x_target, p["x_max"], rtol=1.0e-12, atol=1.0e-12):
+        y_sh = float(shock["y_sh_end"])
+        z_value = float(shock["z_end"])
+        w_value = float(shock["w_end"])
+    elif shock.get("solver_kind") == "numba":
+        x_grid = np.asarray(shock["x_sh_grid"], dtype=float)
+        y_grid = np.asarray(shock["y_sh_grid"], dtype=float)
+        z_grid = np.asarray(shock["z_sh_grid"], dtype=float)
+        w_grid = np.asarray(shock["w_sh_grid"], dtype=float)
+        y_sh = float(np.interp(x_target, x_grid, y_grid))
+        z_value = float(np.interp(x_target, x_grid, z_grid))
+        w_value = float(np.interp(x_target, x_grid, w_grid))
+    else:
+        low = 1.0
+        high = float(shock["y_sh_end"])
+        solver = shock["solver"]
+        for _ in range(72):
+            middle = 0.5 * (low + high)
+            x_middle = float(np.asarray(solver.sol(middle), dtype=float)[0])
+            if x_middle < x_target:
+                low = middle
+            else:
+                high = middle
+        y_sh = 0.5 * (low + high)
+        state = np.asarray(solver.sol(y_sh), dtype=float)
+        z_value = float(state[1])
+        w_value = float(state[2])
+
+    y_diff_end = float(scales["y_in"] * y_sh)
+    shock.update(
+        {
+            "x_diff_end": x_target,
+            "y_sh_diff_end": y_sh,
+            "y_diff_end": y_diff_end,
+            "t_diff_end": float(scales["t_d"] * y_diff_end),
+            "t_diff_end_days": float(scales["t_d"] * y_diff_end / DAY),
+            "z_diff_end": z_value,
+            "w_diff_end": w_value,
+        }
+    )
+    return shock
+
+
 def _solve_shock_ode(p):
     if p["shock_ode_solver"] == "scipy":
-        return _solve_shock_ode_scipy(p)
-    return _solve_shock_ode_numba(p)
+        shock = _solve_shock_ode_scipy(p)
+    else:
+        shock = _solve_shock_ode_numba(p)
+    return _attach_diffusion_boundary_crossing(shock, p)
 
 
 def _evaluate_shock_state(shock, y_sh_grid):
@@ -588,13 +693,40 @@ def _evaluate_shock_state(shock, y_sh_grid):
     return np.asarray(shock["solver"].sol(y_sh_grid), dtype=float)
 
 
-def _build_y_grid(y_start, y_end, y_max, n_steps):
+def _build_y_grid(y_start, y_end, y_max, n_steps, y_extra=None):
+    """Build a strictly increasing grid with resolved physical transitions."""
+    y_start = float(y_start)
+    y_end = float(y_end)
+    y_max = float(y_max)
+    n_steps = int(n_steps)
+    if not (np.isfinite(y_start) and np.isfinite(y_end) and np.isfinite(y_max)):
+        raise ValueError("CSM time-grid boundaries must be finite.")
+    if not (y_max > y_start):
+        raise NonPhysicalModelError(
+            "CSM time grid requires the final time to be later than the start time."
+        )
+    if n_steps < 1:
+        raise ValueError("CSM time grid requires at least one step.")
+
     y_base = np.linspace(y_start, y_max, n_steps + 1)
-    dy0 = float((y_max - y_start) / max(n_steps, 1))
-    y_refine = y_end + dy0 * np.array([-2.0, -1.0, 0.0, 1.0, 2.0], dtype=float)
-    y_grid = np.unique(np.sort(np.concatenate([y_base, np.clip(y_refine, y_start, y_max), [y_end]])))
-    y_grid[0] = y_start
-    y_grid[-1] = y_max
+    dy0 = float((y_max - y_start) / n_steps)
+    boundaries = [float(np.clip(y_end, y_start, y_max))]
+    if y_extra is not None:
+        boundaries.extend(
+            np.clip(np.asarray(y_extra, dtype=float).reshape(-1), y_start, y_max).tolist()
+        )
+
+    pieces = [y_base, np.array([y_start, y_max], dtype=float)]
+    offsets = dy0 * np.array(
+        [-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0], dtype=float
+    )
+    for boundary in boundaries:
+        pieces.append(np.clip(boundary + offsets, y_start, y_max))
+        pieces.append(np.array([boundary], dtype=float))
+
+    y_grid = np.unique(np.concatenate(pieces))
+    if y_grid.size < 2 or np.any(np.diff(y_grid) <= 0.0):
+        raise RuntimeError("Internal CSM time grid is not strictly increasing.")
     return y_grid
 
 
@@ -602,6 +734,7 @@ def _build_expansion_profile(y_grid, shock, p, scales):
     y_end = float(shock["y_end"])
     y_sh_end = float(shock["y_sh_end"])
     w_end = max(float(shock["w_end"]), 1.0e-10)
+    y_diff_end = float(shock["y_diff_end"])
 
     v_sh_end = scales["v_max"] * w_end
     t_sc = p["R_csm"] / v_sh_end
@@ -612,6 +745,7 @@ def _build_expansion_profile(y_grid, shock, p, scales):
     expansion_factor[after_end] = 1.0 + cooling_rate * (y_grid[after_end] - y_end)
     surface_beta = scales["beta_int"] * expansion_factor ** 2
     shock_active = y_grid <= (y_end + 1.0e-14)
+    diffusion_source_active = y_grid <= (y_diff_end + 1.0e-14)
 
     y_sh_grid = np.clip(y_grid / scales["y_in"], 1.0, y_sh_end)
     dense_state = _evaluate_shock_state(shock, y_sh_grid)
@@ -622,7 +756,15 @@ def _build_expansion_profile(y_grid, shock, p, scales):
     z_sh[~shock_active] = float(shock["z_end"])
     w_sh[~shock_active] = w_end
 
-    return expansion_factor, surface_beta, shock_active, x_sh, z_sh, w_sh
+    return (
+        expansion_factor,
+        surface_beta,
+        shock_active,
+        diffusion_source_active,
+        x_sh,
+        z_sh,
+        w_sh,
+    )
 
 
 def _deposit_shock_source(x_grid, x_sh, w, p):
@@ -689,16 +831,25 @@ def _deposit_shock_source(x_grid, x_sh, w, p):
     return source, A_sh
 
 
-def _precompute_sources(y_grid, x_grid, p, scales, shock_active, x_sh, w_sh):
+def _precompute_sources(
+    y_grid,
+    x_grid,
+    p,
+    scales,
+    shock_active,
+    diffusion_source_active,
+    x_sh,
+    w_sh,
+):
     shock_source = np.zeros((y_grid.size, x_grid.size), dtype=float)
     A_sh = np.zeros(y_grid.size, dtype=float)
     L_sh_heat = np.zeros(y_grid.size, dtype=float)
+    L_sh_heat_raw = np.zeros(y_grid.size, dtype=float)
 
     for i in range(y_grid.size):
         if not shock_active[i]:
             continue
-        shock_source[i], A_sh[i] = _deposit_shock_source(x_grid, float(x_sh[i]), float(w_sh[i]), p)
-        L_sh_heat[i] = (
+        L_sh_heat_raw[i] = (
             p["eps_sh"]
             * 2.0
             * PI
@@ -706,12 +857,23 @@ def _precompute_sources(y_grid, x_grid, p, scales, shock_active, x_sh, w_sh):
             * _rho_csm_of_x(x_sh[i], p, scales)
             * (scales["v_max"] * w_sh[i]) ** 3
         )
+        if diffusion_source_active[i]:
+            shock_source[i], A_sh[i] = _deposit_shock_source(
+                x_grid, float(x_sh[i]), float(w_sh[i]), p
+            )
+        L_sh_heat[i] = L_sh_heat_raw[i]
 
-    return {"S_total": shock_source, "A_sh": A_sh, "L_sh_heat": L_sh_heat}
+    return {
+        "S_total": shock_source,
+        "A_sh": A_sh,
+        "L_sh_heat": L_sh_heat,
+        "L_sh_heat_raw": L_sh_heat_raw,
+        "L_sh_heat_diffusion": np.where(diffusion_source_active, L_sh_heat_raw, 0.0),
+    }
 
 
 # -----------------------------------------------------------------------------
-# CN diffusion loop (Numba JIT)
+# Crank--Nicolson diffusion loop (Numba JIT)
 # -----------------------------------------------------------------------------
 
 @numba.njit(fastmath=True, cache=True)
@@ -766,7 +928,9 @@ def _fast_pde_loop(
 
     for n in range(1, n_times):
         dy = dy_steps[n - 1]
-        expansion = expansion_vals[n]
+        half_dy = 0.5 * dy
+        expansion_old = expansion_vals[n - 1]
+        expansion_new = expansion_vals[n]
         beta = beta_vals[n]
 
         a[:] = 0.0
@@ -779,12 +943,20 @@ def _fast_pde_loop(
 
         for i in range(n_inner):
             idx = i + 1
-            lower = -dy * expansion * coeff_imh_base[i]
-            upper = -dy * expansion * coeff_iph_base[i]
+            coeff_left = coeff_imh_base[i]
+            coeff_right = coeff_iph_base[i]
+            lower = -half_dy * expansion_new * coeff_left
+            upper = -half_dy * expansion_new * coeff_right
             a[idx] = lower
             b_diag[idx] = 1.0 - lower - upper
             c_up[idx] = upper
-            rhs[idx] = e_now[idx] + dy * total_source[n, idx]
+            diffusion_old = expansion_old * (
+                coeff_left * e_now[idx - 1]
+                - (coeff_left + coeff_right) * e_now[idx]
+                + coeff_right * e_now[idx + 1]
+            )
+            source_avg = total_source[n - 1, idx] + total_source[n, idx]
+            rhs[idx] = e_now[idx] + half_dy * (diffusion_old + source_avg)
 
         a[n_pts - 1] = -beta / dx
         b_diag[n_pts - 1] = 1.0 + beta / dx
@@ -799,10 +971,93 @@ def _fast_pde_loop(
     return L_bol, e_hist
 
 
-def _photosphere(L_bol, expansion_factor, shock_active, p):
-    del shock_active
+def _compose_radiative_phases(t_s, L_diffusion, L_sh_heat, expansion_factor, shock):
+    """Join diffusion, shock-following, and post-CSM cooling continuously."""
+    t_s = np.asarray(t_s, dtype=float)
+    L_diffusion = np.asarray(L_diffusion, dtype=float)
+    L_sh_heat = np.asarray(L_sh_heat, dtype=float)
+    expansion_factor = np.asarray(expansion_factor, dtype=float)
+
+    t_ph = float(shock["t_diff_end"])
+    t_out = float(shock["t_end"])
+    diffusion_phase = t_s <= (t_ph + 1.0e-10)
+    shock_following_phase = (t_s > t_ph) & (t_s <= (t_out + 1.0e-10))
+    cooling_phase = t_s > t_out
+
+    L_diffusion_nonnegative = np.maximum(L_diffusion, 0.0)
+    L_sh_heat_nonnegative = np.maximum(L_sh_heat, 0.0)
+    L_emergent = L_diffusion_nonnegative.copy()
+
+    L_diffusion_at_breakout = float(np.interp(t_ph, t_s, L_diffusion_nonnegative))
+    L_sh_heat_at_breakout = float(np.interp(t_ph, t_s, L_sh_heat_nonnegative))
+    matching_excess = L_diffusion_at_breakout - L_sh_heat_at_breakout
+
+    if L_diffusion_at_breakout > 1.0e-300:
+        diffusion_tail_weight = np.clip(
+            L_diffusion_nonnegative / L_diffusion_at_breakout,
+            0.0,
+            1.0,
+        )
+    else:
+        following_duration = max(t_out - t_ph, 1.0e-300)
+        diffusion_tail_weight = np.clip(
+            (t_out - t_s) / following_duration, 0.0, 1.0
+        )
+
+    matched_shock_following = np.maximum(
+        L_sh_heat_nonnegative + matching_excess * diffusion_tail_weight,
+        0.0,
+    )
+    L_emergent[shock_following_phase] = matched_shock_following[
+        shock_following_phase
+    ]
+
+    if np.any(cooling_phase):
+        L_following_out = float(np.interp(t_out, t_s, matched_shock_following))
+        expansion_at_out = float(np.interp(t_out, t_s, expansion_factor))
+        relative_expansion = np.maximum(
+            expansion_factor[cooling_phase] / max(expansion_at_out, 1.0e-300),
+            1.0,
+        )
+        L_emergent[cooling_phase] = (
+            max(L_following_out, 0.0) / relative_expansion**2
+        )
+
+    phase_code = np.zeros(t_s.size, dtype=np.int8)
+    phase_code[shock_following_phase] = 1
+    phase_code[cooling_phase] = 2
+    return {
+        "L_bol": L_emergent,
+        "phase_code": phase_code,
+        "diffusion_phase": diffusion_phase,
+        "shock_following_phase": shock_following_phase,
+        "cooling_phase": cooling_phase,
+        "diffusion_tail_weight": diffusion_tail_weight,
+        "breakout_diffusion_luminosity": L_diffusion_at_breakout,
+        "breakout_shock_luminosity": L_sh_heat_at_breakout,
+        "breakout_matching_excess": matching_excess,
+        "cooling_law": "homologous radiation cooling: R_ph~a, T~a^-1, L~a^-2",
+    }
+
+
+def _photosphere(L_bol, expansion_factor, x_sh, radiative_phase_code, p, scales):
     R_out = p["R_csm"] * expansion_factor
     L_pos = np.maximum(np.asarray(L_bol, dtype=float), 1.0e-300)
+
+    if p["photosphere_mode"] == "tau":
+        phase_code = np.asarray(radiative_phase_code, dtype=np.int8)
+        R_ph = np.full(L_pos.shape, scales["R_diff"], dtype=float)
+        shock_following = phase_code == 1
+        cooling = phase_code == 2
+        R_ph[shock_following] = (
+            p["R_in"] * np.asarray(x_sh, dtype=float)[shock_following]
+        )
+        R_ph[cooling] = R_out[cooling]
+        T_eff = (
+            L_pos
+            / (4.0 * PI * SIGMA_SB * np.maximum(R_ph, 1.0e-300) ** 2)
+        ) ** 0.25
+        return T_eff, R_ph, R_out
 
     T_surface = (L_pos / (4.0 * PI * SIGMA_SB * np.maximum(R_out, 1.0e-300) ** 2)) ** 0.25
     R_floor = np.sqrt(L_pos / (4.0 * PI * SIGMA_SB * p["T_floor"] ** 4))
@@ -869,6 +1124,7 @@ class CSMModel:
         shock_rk_dx=0.05,
         shock_kernel_cells=2,
         shock_kernel_width_Rsun=0.0,
+        photosphere_mode="tau",
     ):
         return _build_params(
             theta,
@@ -886,6 +1142,7 @@ class CSMModel:
             shock_rk_dx,
             shock_kernel_cells,
             shock_kernel_width_Rsun,
+            photosphere_mode,
         )
 
     def calculate_light_curve(self, theta, Nx=140, Ny=1000, t_max_days=150.0, return_full=False, **kwargs):
@@ -894,8 +1151,16 @@ class CSMModel:
         scales = shock["scales"]
 
         y_max = max(p["t_max_days"] * DAY / scales["t_d"], shock["y_end"])
-        x_grid = np.linspace(1.0, p["x_max"], p["N_x"] + 1, dtype=float)
-        y_grid = _build_y_grid(scales["y_in"], shock["y_end"], y_max, p["N_t"])
+        x_grid = np.linspace(
+            1.0, scales["x_diff_max"], p["N_x"] + 1, dtype=float
+        )
+        y_grid = _build_y_grid(
+            scales["y_in"],
+            shock["y_end"],
+            y_max,
+            p["N_t"],
+            y_extra=[shock["y_diff_end"]],
+        )
         t_s = y_grid * scales["t_d"]
         dx = float(x_grid[1] - x_grid[0])
         dy_steps = np.diff(y_grid).astype(float)
@@ -904,21 +1169,33 @@ class CSMModel:
             expansion_factor,
             surface_beta,
             shock_active,
+            diffusion_source_active,
             x_sh,
             z_sh,
             w_sh,
         ) = _build_expansion_profile(y_grid, shock, p, scales)
 
-        sources = _precompute_sources(y_grid, x_grid, p, scales, shock_active, x_sh, w_sh)
+        sources = _precompute_sources(
+            y_grid,
+            x_grid,
+            p,
+            scales,
+            shock_active,
+            diffusion_source_active,
+            x_sh,
+            w_sh,
+        )
 
         x_inner = x_grid[1:-1]
-        xi_sq = (1.0 / p["x_max"]) ** 2
+        xi_sq = (1.0 / scales["x_diff_max"]) ** 2
         dx_sq = dx ** 2
         coeff_imh_base = (x_inner - 0.5 * dx) ** (2.0 + p["s"]) / (xi_sq * x_inner ** 2 * dx_sq)
         coeff_iph_base = (x_inner + 0.5 * dx) ** (2.0 + p["s"]) / (xi_sq * x_inner ** 2 * dx_sq)
-        Lfac = scales["L0"] * p["x_max"] ** (2.0 + p["s"]) / dx
+        Lfac = (
+            scales["L0"] * scales["x_diff_max"] ** (2.0 + p["s"]) / dx
+        )
 
-        L_bol, e_hist = _fast_pde_loop(
+        L_bol_diffusion, e_hist = _fast_pde_loop(
             dy_steps,
             expansion_factor.astype(float),
             surface_beta.astype(float),
@@ -929,13 +1206,50 @@ class CSMModel:
             Lfac,
             bool(return_full),
         )
-        T_eff, R_ph, R_out = _photosphere(L_bol, expansion_factor, shock_active, p)
+        if p["photosphere_mode"] == "tau":
+            radiative_phases = _compose_radiative_phases(
+                t_s,
+                L_bol_diffusion,
+                sources["L_sh_heat_raw"],
+                expansion_factor,
+                shock,
+            )
+        else:
+            n_times = t_s.size
+            radiative_phases = {
+                "L_bol": L_bol_diffusion,
+                "phase_code": np.zeros(n_times, dtype=np.int8),
+                "diffusion_phase": np.ones(n_times, dtype=bool),
+                "shock_following_phase": np.zeros(n_times, dtype=bool),
+                "cooling_phase": np.zeros(n_times, dtype=bool),
+                "diffusion_tail_weight": np.ones(n_times, dtype=float),
+                "breakout_diffusion_luminosity": float(
+                    np.interp(shock["t_end"], t_s, L_bol_diffusion)
+                ),
+                "breakout_shock_luminosity": float(
+                    np.interp(shock["t_end"], t_s, sources["L_sh_heat_raw"])
+                ),
+                "breakout_matching_excess": 0.0,
+                "cooling_law": "legacy outer-boundary diffusion",
+            }
+        L_bol = radiative_phases["L_bol"]
+        T_eff, R_ph, R_out = _photosphere(
+            L_bol,
+            expansion_factor,
+            x_sh,
+            radiative_phases["phase_code"],
+            p,
+            scales,
+        )
 
         out = slice(1, None)
         t_s_out = t_s[out]
         y_grid_out = y_grid[out]
         L_bol_out = L_bol[out]
+        L_bol_diffusion_out = L_bol_diffusion[out]
         L_sh_heat_out = sources["L_sh_heat"][out]
+        L_sh_heat_raw_out = sources["L_sh_heat_raw"][out]
+        L_sh_heat_diffusion_out = sources["L_sh_heat_diffusion"][out]
         T_eff_out = T_eff[out]
         R_ph_out = R_ph[out]
         R_out_out = R_out[out]
@@ -943,6 +1257,7 @@ class CSMModel:
         z_sh_out = z_sh[out]
         w_sh_out = w_sh[out]
         shock_active_out = shock_active[out]
+        diffusion_source_active_out = diffusion_source_active[out]
         expansion_factor_out = expansion_factor[out]
         e_hist_out = e_hist[out] if bool(return_full) else e_hist
 
@@ -956,7 +1271,10 @@ class CSMModel:
                 "x_grid": x_grid,
                 "y_grid": y_grid_out,
                 "L_bol": L_bol_out,
+                "L_bol_diffusion": L_bol_diffusion_out,
                 "L_sh_heat": L_sh_heat_out,
+                "L_sh_heat_raw": L_sh_heat_raw_out,
+                "L_sh_heat_diffusion": L_sh_heat_diffusion_out,
                 "T_eff": T_eff_out,
                 "R_ph": R_ph_out,
                 "R_out": R_out_out,
@@ -965,12 +1283,56 @@ class CSMModel:
                 "w_sh": w_sh_out,
                 "v_sh": scales["v_max"] * w_sh_out,
                 "shock_active": shock_active_out,
+                "diffusion_source_active": diffusion_source_active_out,
+                "radiative_phase_code": radiative_phases["phase_code"][out],
+                "diffusion_phase": radiative_phases["diffusion_phase"][out],
+                "shock_following_phase": radiative_phases[
+                    "shock_following_phase"
+                ][out],
+                "cooling_phase": radiative_phases["cooling_phase"][out],
+                "diffusion_tail_weight": radiative_phases[
+                    "diffusion_tail_weight"
+                ][out],
+                "breakout_diffusion_luminosity": radiative_phases[
+                    "breakout_diffusion_luminosity"
+                ],
+                "breakout_shock_luminosity": radiative_phases[
+                    "breakout_shock_luminosity"
+                ],
+                "breakout_matching_excess": radiative_phases[
+                    "breakout_matching_excess"
+                ],
+                "cooling_law": radiative_phases["cooling_law"],
                 "shock_end_day": shock["t_end_days"],
+                "diffusion_boundary_crossing_day": shock["t_diff_end_days"],
+                "radiation_outer_boundary": {
+                    "type": "grey_eddington_robin",
+                    "tau": scales["boundary_tau"],
+                    "flux_over_cE": scales["surface_flux_factor"],
+                    "beta_initial": scales["beta_int"],
+                },
                 "expansion_factor": expansion_factor_out,
                 "e_hist": e_hist_out,
             }
 
         return t_s_out, L_bol_out, T_eff_out, R_ph_out
+
+    def calculate_shock_diagnostics(
+        self, theta, Nx=140, Ny=1000, t_max_days=150.0, **kwargs
+    ):
+        """Return shock and optical-depth diagnostics without solving diffusion."""
+        p = self._params_from_theta(theta, Nx, Ny, t_max_days, **kwargs)
+        shock = _solve_shock_ode(p)
+        scales = shock["scales"]
+        return {
+            "tau_total": float(scales["tau_total"]),
+            "x_ph": float(scales["x_diff_max"]),
+            "R_ph_Rsun": float(scales["R_diff"] / R_SUN),
+            "R_csm_out_Rsun": float(p["R_csm"] / R_SUN),
+            "diffusion_boundary_crossing_day": float(shock["t_diff_end_days"]),
+            "shock_end_day": float(shock["t_end_days"]),
+            "v_ej_mean_km_s": float(scales["v_ej_mean"] / 1.0e5),
+        }
 
     def calculate_dynamics(self, theta, Nx=140, Ny=1000, t_max_days=150.0, **kwargs):
         result = self.calculate_light_curve(theta, Nx=Nx, Ny=Ny, t_max_days=t_max_days, return_full=True, **kwargs)

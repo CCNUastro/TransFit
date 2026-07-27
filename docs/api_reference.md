@@ -360,6 +360,35 @@ For the `nickel` model, `solver_kwargs` additionally accepts:
 |---|---|---|
 | `density_profile` | `"uniform"` | Density structure: `"uniform"`, `"bpl"`/`"broken_power_law"`, or `"exp"`/`"exponential"`/`"ia"`. |
 
+For the `csm` model, `solver_kwargs` additionally accepts:
+
+| Key | Default | Meaning |
+|---|---:|---|
+| `photosphere_mode` | `"tau"` | `"tau"` uses the optical-depth photosphere; `"outer"` retains the legacy outer-boundary/temperature-floor treatment. |
+
+In the default CSM `"tau"` mode, the diffusion boundary is the radius with
+outward optical depth `tau=2/3`. Before the forward shock reaches that radius,
+the photosphere stays at the diffusion boundary. It then follows the forward
+shock until CSM exit and expands during the cooling phase. The three phases are
+joined continuously. The CSM diffusion equation uses Crank--Nicolson and its
+time grid explicitly includes both physical transition times.
+
+An optically thin CSM with total radial optical depth at or below `2/3` is
+outside this diffusion model. Forward calls raise a physical-domain error;
+fitting treats such a sample as `-inf` rather than terminating the sampler.
+`T_floor` is inactive and fixed in `"tau"` multiband fits. To retain and fit
+the legacy temperature-floor prescription, select:
+
+```python
+model_kwargs={
+    "solver_kwargs": {
+        "Nx": 100,
+        "Ny": 1000,
+        "photosphere_mode": "outer",
+    }
+}
+```
+
 `delta` and `n` are physical nickel-model parameters, not solver options:
 
 | Parameter | Default | Default prior bounds | Meaning |

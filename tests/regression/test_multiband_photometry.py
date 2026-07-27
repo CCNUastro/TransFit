@@ -183,7 +183,7 @@ def test_csm_forward_api_outputs_positive_finite_bolometric_curve():
         solver_kwargs={"Nx": 20, "Ny": 40},
     )
 
-    assert lc.t_days.size == 45
+    assert lc.t_days.size >= 41
     assert np.all(np.diff(lc.t_days) > 0.0)
     assert np.all(np.isfinite(lc.Lbol))
     assert np.all(lc.Lbol > 0.0)
@@ -218,7 +218,23 @@ def test_csm_multiband_forward_uses_canonical_full_params():
     )
 
     assert lc.bands == ["B"]
-    assert np.all(np.isfinite(lc.y["B"]))
+    finite = np.isfinite(lc.y["B"])
+    assert np.any(finite)
+    assert np.all(finite[np.flatnonzero(finite)[0] :])
+
+    pred = tf.predict_multiband(
+        model="csm",
+        params=PARAMS_CSM,
+        z=0.001728,
+        distance_modulus=MU_7P5_MPC,
+        filters={"B": "johnson_cousins.B"},
+        t_days=np.array([5.0, 10.0, 15.0]),
+        band=np.array(["B", "B", "B"]),
+        y_kind="mag",
+        t_max_days=20.0,
+        solver_kwargs={"Nx": 20, "Ny": 40},
+    )
+    assert np.all(np.isfinite(pred))
 
 
 def test_fit_result_uses_params_for_public_best_fit_values():

@@ -8,6 +8,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Literal, Any, Tuple
 import numpy as np
 
 from .data import BolometricData, MultiBandData
+from .exceptions import NonPhysicalModelError
 from .modules.extinction import ExtinctionSpec, normalize_extinction, validate_extinction_spec
 from .modules.filters import FilterProfile, normalize_filters, validate_filter_map
 from .modules.interp import interp_fit
@@ -32,7 +33,7 @@ _FIT_T_MAX_DAYS_PADDING = 20.0
 _CSM_INTERNAL_R_CSM_IN = 100.0
 
 
-class _NonPhysicalModelOutput(ValueError):
+class _NonPhysicalModelOutput(NonPhysicalModelError):
     """Raised when a solved model state is not usable as a physical prediction."""
 
 
@@ -516,6 +517,7 @@ def _solve_state(
 
 _BASE_SOLVER_KEYS = {"Nx", "Ny"}
 _NICKEL_SOLVER_KEYS = {"density_profile"}
+_CSM_SOLVER_KEYS = {"photosphere_mode"}
 _DEFAULT_IA_R0_RSUN = 0.01
 
 
@@ -551,6 +553,8 @@ def _resolve_solver_kwargs(
     allowed = set(_BASE_SOLVER_KEYS)
     if model_canonical == "nickel":
         allowed.update(_NICKEL_SOLVER_KEYS)
+    elif model_canonical == "csm":
+        allowed.update(_CSM_SOLVER_KEYS)
 
     unknown = sorted(set(opts) - allowed)
     if unknown:
@@ -571,6 +575,13 @@ def _resolve_solver_kwargs(
     if model_canonical == "nickel":
         if "density_profile" in opts:
             out["density_profile"] = _normalize_density_profile(opts["density_profile"])
+    elif model_canonical == "csm" and "photosphere_mode" in opts:
+        photosphere_mode = str(opts["photosphere_mode"]).strip().lower()
+        if photosphere_mode not in {"tau", "outer"}:
+            raise ValueError(
+                "solver_kwargs['photosphere_mode'] must be 'tau' or 'outer'."
+            )
+        out["photosphere_mode"] = photosphere_mode
 
     return out
 
@@ -1377,7 +1388,7 @@ class _FitLnProb:
 
         try:
             y_mod = self.predictor(model_params, t_eval)
-        except _NonPhysicalModelOutput:
+        except NonPhysicalModelError:
             return -np.inf
 
         if np.any(~np.isfinite(y_mod)):
@@ -1573,6 +1584,47 @@ def _validate_density_structure_fit_configuration(
         )
 
 
+def _csm_photosphere_mode(model_kwargs: Optional[Dict[str, Any]]) -> str:
+    solver_kwargs = dict((model_kwargs or {}).get("solver_kwargs", {}) or {})
+    return str(solver_kwargs.get("photosphere_mode", "tau")).strip().lower()
+
+
+def _validate_csm_photosphere_fit_configuration(
+    *,
+    model: str,
+    priors: Optional[Dict[str, Any]],
+    model_kwargs: Dict[str, Any],
+) -> None:
+    if canonical_model_name(model, warn_legacy=False) != "csm":
+        return
+    if _csm_photosphere_mode(model_kwargs) == "tau" and "T_floor" in dict(
+        priors or {}
+    ):
+        raise ValueError(
+            "CSM photosphere_mode='tau' determines temperature from the "
+            "tau=2/3 radius, so T_floor is inactive and cannot be sampled. "
+            "Use photosphere_mode='outer' to fit T_floor."
+        )
+
+
+def _apply_multiband_csm_photosphere_defaults(
+    *,
+    model: str,
+    priors_model: Optional[Dict[str, Any]],
+    fixed_model: Dict[str, float],
+    model_kwargs: Dict[str, Any],
+) -> Dict[str, float]:
+    fixed_out = dict(fixed_model)
+    if (
+        canonical_model_name(model, warn_legacy=False) == "csm"
+        and _csm_photosphere_mode(model_kwargs) == "tau"
+        and "T_floor" not in dict(priors_model or {})
+        and "T_floor" not in fixed_out
+    ):
+        fixed_out["T_floor"] = 5000.0
+    return fixed_out
+
+
 def _t_shift_upper_for_fit(names_all: Sequence[str], bounds_all: np.ndarray, fixed: Dict[str, float]) -> float:
     if "t_shift" in fixed:
         return float(fixed["t_shift"])
@@ -1674,6 +1726,11 @@ def fit_multiband(
         fixed=fixed,
         model_kwargs=model_kwargs_pred,
     )
+    _validate_csm_photosphere_fit_configuration(
+        model=model,
+        priors=priors,
+        model_kwargs=model_kwargs_pred,
+    )
     data = _apply_data_filter(data)
 
     # ---- data ----
@@ -1699,6 +1756,12 @@ def fit_multiband(
         priors_model,
         fixed_model,
         model_kwargs_pred,
+    )
+    fixed_model = _apply_multiband_csm_photosphere_defaults(
+        model=model,
+        priors_model=priors_model,
+        fixed_model=fixed_model,
+        model_kwargs=model_kwargs_pred,
     )
     priors_lin, priors_log10 = _split_prior_specs(priors_model)
     names_all, bounds_all = build_bounds(model, priors=priors_lin, include_t_shift=True)

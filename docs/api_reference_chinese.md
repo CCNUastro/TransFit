@@ -345,6 +345,32 @@ res = tf.fit_multiband(
 |---|---|---|
 | `density_profile` | `"uniform"` | 密度结构：`"uniform"`、`"bpl"`/`"broken_power_law"` 或 `"exp"`/`"exponential"`/`"ia"`。 |
 
+对于 `csm` 模型，`solver_kwargs` 还支持：
+
+| 键 | 默认值 | 含义 |
+|---|---:|---|
+| `photosphere_mode` | `"tau"` | `"tau"` 使用光学深度光球；`"outer"` 保留原来的外边界/温度下限处理。 |
+
+默认的 CSM `"tau"` 模式把向外光学深度 `tau=2/3` 的位置作为扩散边界。
+前向激波到达该位置以前，光球固定在扩散边界；随后光球跟随前向激波，离开 CSM
+后进入膨胀冷却。三个阶段连续连接。CSM 扩散方程使用 Crank--Nicolson，时间
+网格会显式包含两个物理阶段切换时刻。
+
+若 CSM 的总径向光学深度不超过 `2/3`，则超出当前扩散模型的适用范围。正向
+计算会给出物理域错误；拟合会把该样本记为 `-inf`，不会终止采样器。
+`"tau"` 多波段拟合中 `T_floor` 不活动并默认固定。如果需要原来的温度下限
+处理并拟合 `T_floor`，使用：
+
+```python
+model_kwargs={
+    "solver_kwargs": {
+        "Nx": 100,
+        "Ny": 1000,
+        "photosphere_mode": "outer",
+    }
+}
+```
+
 `delta` 和 `n` 是 nickel 模型的物理参数，不属于求解器选项：
 
 | 参数 | 默认值 | 默认先验范围 | 含义 |

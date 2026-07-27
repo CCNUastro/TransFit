@@ -39,10 +39,12 @@ class BlackbodySED:
         T = np.clip(T, self.Tmin, np.inf)
 
         x = (H_PLANCK * nu) / (K_BOLTZ * T)  # (Nb,Nt)
-        denom = np.expm1(x)                  # exp(x)-1 (stable)
-        denom = np.where(denom == 0.0, np.inf, denom)
-
-        Bnu = (2.0 * H_PLANCK * nu**3) / (C_LIGHT**2) / denom
+        # In the Wien tail exp(x) may overflow, which correctly corresponds
+        # to B_nu underflowing to zero rather than a numerical failure.
+        with np.errstate(over="ignore", under="ignore", divide="ignore", invalid="ignore"):
+            denom = np.expm1(x)
+            denom = np.where(denom == 0.0, np.inf, denom)
+            Bnu = (2.0 * H_PLANCK * nu**3) / (C_LIGHT**2) / denom
         return np.where(np.isfinite(Bnu), Bnu, np.nan)
 
     def lnu(self, nu_rest_hz: np.ndarray, Teff_K: np.ndarray, R_cm: np.ndarray) -> np.ndarray:

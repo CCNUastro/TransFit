@@ -41,5 +41,5 @@ def forward_param_defaults(model: str) -> dict[str, float]:
     if m == CANONICAL_MAGNETAR_NI:
         return {"f_mag": 0.2}
     if m == CANONICAL_CSM:
-        return {"s": 2.0}
+        return {"s": 2.0, "T_floor": 5000.0}
     return {}
