@@ -38,10 +38,12 @@ should use the canonical names.
 | `E_Th_in` | initial thermal energy, $10^{49}\,{\rm erg}$ |
 | `M_ni` | nickel mass, $M_\odot$ |
 | `R_0` | initial radius, $R_\odot$ |
-| `f_ni` | nickel mixing coordinate, dimensionless |
+| `f_ni` | outer Lagrangian mass coordinate of the Ni-mixed region, $M(<x_{\rm Ni})/M_{\rm ej}$ |
 | `kappa` | optical opacity, ${\rm cm^2\,g^{-1}}$ |
 | `kappa_gamma` | gamma-ray opacity, ${\rm cm^2\,g^{-1}}$ |
 | `T_floor` | temperature floor, K |
+| `delta` | inner BPL density index, dimensionless |
+| `n` | outer BPL density index, dimensionless |
 
 ### `magnetar`
 
@@ -143,14 +145,24 @@ tf.MultiBandData(t_days, band, y, yerr, mask=None)
 Bolometric forward call:
 
 ```python
+params = {
+    **params,
+    "delta": 0.0,
+    "n": 10.0,
+}
+
 tf.lightcurve_bol(
     model="nickel",
     params=params,
     z=0.001728,
     t_max_days=150.0,
-    solver_kwargs=None,
+    solver_kwargs={"density_profile": "bpl"},
 )
 ```
+
+The backward-compatible default is `density_profile="uniform"`. Use either
+`"bpl"`/`"broken_power_law"` for the broken power law or
+`"exp"`/`"exponential"`/`"ia"` for a finite exponential Type-Ia-like profile.
 
 Returns `BolometricLC` with:
 
@@ -340,8 +352,90 @@ data and the allowed `t_shift` range.
 | `Nx` | `100` | spatial/grid resolution parameter |
 | `Ny` | `1000` | time/grid resolution parameter |
 
-Both values must be positive integers. Beginner examples intentionally do not
-expose these controls.
+`Nx` and `Ny` must be positive integers.
+
+For the `nickel` model, `solver_kwargs` additionally accepts:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `density_profile` | `"uniform"` | Density structure: `"uniform"`, `"bpl"`/`"broken_power_law"`, or `"exp"`/`"exponential"`/`"ia"`. |
+
+`delta` and `n` are physical nickel-model parameters, not solver options:
+
+| Parameter | Default | Default prior bounds | Meaning |
+|---|---:|---:|---|
+| `delta` | `0.0` | `[0.0, 2.9]` | Inner BPL density index; physically requires `0 <= delta < 3`. |
+| `n` | `10.0` | `[5.1, 14.0]` | Outer BPL density index; physically requires `n > 5`. |
+
+For forward calculations, omitted values use `delta=0` and `n=10`. The same
+values remain fixed by default in `fit_bol` and `fit_multiband`, including when
+`density_profile="bpl"` is selected. To sample either BPL index, the caller must
+explicitly put that parameter in `priors`; an explicit value in `fixed` keeps
+it fixed. Uniform and exponential profiles do not use these parameters and
+reject attempts to sample them.
+
+The BPL is normalized using the sampled `M_ej` and `v_ej`, with
+`rho/rho_t = x**(-delta)` below the transition `x=1` and `x**(-n)` above it.
+The diffusion grid covers `10^-3 <= x=v/v_t <= 3`; `v_max/v_t=3` is fixed
+internally and is not a public fitting option. The exponential grid covers
+`10^-3 <= x=r/R_e=v/v_e <= 12`, with `R_e=R_0/12`. Both non-uniform
+profiles use backward Euler, while uniform density uses Crank--Nicolson.
+
+All three profiles are finite at the initial outer radius `R_0`. Their density
+and velocity scales are computed from finite-domain mass and kinetic-energy
+integrals, so the represented ejecta recover exactly the input `M_ej` and
+`E_K=0.5*M_ej*v_ej**2`; no mass at infinity is assumed. The Ni cutoff is set
+by the Lagrangian mass coordinate `f_ni=M(<x_Ni)/M_ej`. The solver derives the
+profile-dependent radius/velocity coordinate `x_Ni`, assigns a constant Ni
+abundance inside that cutoff, and uses the density-weighted mass integral to
+ensure the integrated Ni mass remains `M_ni`. Thus `f_ni=0.8` means 80% of the
+represented ejecta mass, not necessarily `x_Ni/x_max=0.8`.
+
+For an exponential forward call:
+
+```python
+tf.lightcurve_bol(
+    model="nickel",
+    params=params,
+    z=0.001728,
+    solver_kwargs={"density_profile": "ia"},
+)
+```
+
+For `fit_bol` and `fit_multiband`, the exponential/Ia profile does not sample
+`R_0`. It defaults to the fixed white-dwarf radius `R_0=0.01 R_sun`; an
+explicit `fixed={"R_0": value}` overrides that default. Supplying `R_0` in
+`priors` is rejected. The model time grid starts at the explosion epoch
+`t=0`, while `R_0/v_max` remains only an expansion timescale.
+
+For a purely radioactive Ia calculation (`E_Th_in=0`), changing the fixed
+radius from `0.01` to `1 R_sun` changes the luminosity after five days by less
+than about 0.2% in the regression model. A non-zero initial thermal energy can
+make the first few days strongly radius-dependent, so the radius choice is not
+generally negligible for shock-cooling calculations.
+
+Selecting BPL through `model_kwargs` keeps `delta=0` and `n=10` fixed by
+default:
+
+```python
+result = tf.fit_bol(
+    data=data,
+    model="nickel",
+    model_kwargs={"solver_kwargs": {"density_profile": "bpl"}},
+)
+
+assert "delta" not in result.param_names
+assert "n" not in result.param_names
+assert result.fixed["delta"] == 0.0
+assert result.fixed["n"] == 10.0
+```
+
+To fit the density indices, opt in explicitly with
+`priors={"delta": (0.0, 2.0), "n": (6.0, 12.0)}`. Either parameter may be
+enabled independently. Both are continuous real values; the physical limits
+are `0 <= delta < 3` and `n > 5`.
+See the [v0.2 changelog](changelog.md#v02--2026-07-26) for the complete
+selection table, compatibility behavior, and reproducible figures.
 
 ## SED Choices
 

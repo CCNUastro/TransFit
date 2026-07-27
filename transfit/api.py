@@ -390,7 +390,11 @@ def _model_values_from_vector(model: str, model_vector) -> Dict[str, float]:
     return {str(n): float(v) for n, v in zip(names, values_t)}
 
 
-def _physical_constraint_reason(vals: Dict[str, float]) -> Optional[str]:
+def _physical_constraint_reason(
+    vals: Dict[str, float],
+    *,
+    model: Optional[str] = None,
+) -> Optional[str]:
     """
     Return a short reason when a parameter set violates model-independent
     physical constraints, otherwise None.
@@ -429,6 +433,19 @@ def _physical_constraint_reason(vals: Dict[str, float]) -> Optional[str]:
         if values["M_ni"] > values["M_ej"]:
             return "M_ni must be <= M_ej."
 
+    if (
+        model is not None
+        and canonical_model_name(model, warn_legacy=False) == "nickel"
+        and {"M_ej", "M_ni", "f_ni"}.issubset(values)
+    ):
+        mixed_mass = values["f_ni"] * values["M_ej"]
+        tolerance = 1.0e-12 * max(abs(values["M_ni"]), abs(mixed_mass), 1.0)
+        if values["M_ni"] > mixed_mass + tolerance:
+            return (
+                "Nickel mass-coordinate mixing requires "
+                "M_ni <= f_ni*M_ej (equivalently f_ni >= M_ni/M_ej)."
+            )
+
     if "R_csm_in" in values and "R_csm_out" in values:
         if not (values["R_csm_out"] > values["R_csm_in"]):
             return "R_csm_out must be > R_csm_in."
@@ -439,14 +456,21 @@ def _physical_constraint_reason(vals: Dict[str, float]) -> Optional[str]:
     return None
 
 
-def _validate_physical_values(vals: Dict[str, float]) -> None:
-    reason = _physical_constraint_reason(vals)
+def _validate_physical_values(
+    vals: Dict[str, float],
+    *,
+    model: Optional[str] = None,
+) -> None:
+    reason = _physical_constraint_reason(vals, model=model)
     if reason is not None:
         raise ValueError(f"Physical parameter constraints are invalid: {reason}")
 
 
 def _validate_physical_model_vector(model: str, model_vector) -> None:
-    _validate_physical_values(_model_values_from_vector(model, model_vector))
+    _validate_physical_values(
+        _model_values_from_vector(model, model_vector),
+        model=model,
+    )
 
 
 def _resolve_forward_params(
@@ -470,24 +494,84 @@ def _observer_days_to_rest_days(t_days_obs: float, z: float) -> float:
     return float(t_days_obs) / (1.0 + float(z))
 
 
-def _solve_state(engine, model_vector, *, Nx: int, Ny: int, t_max_days_obs: float, z: float):
+def _solve_state(
+    engine,
+    model_vector,
+    *,
+    Nx: int,
+    Ny: int,
+    t_max_days_obs: float,
+    z: float,
+    **solver_options,
+):
     t_max_days_rest = _observer_days_to_rest_days(t_max_days_obs, z)
-    return engine.calculate_light_curve(model_vector, Nx=Nx, Ny=Ny, t_max_days=t_max_days_rest)
+    return engine.calculate_light_curve(
+        model_vector,
+        Nx=Nx,
+        Ny=Ny,
+        t_max_days=t_max_days_rest,
+        **solver_options,
+    )
 
 
-def _resolve_solver_kwargs(solver_kwargs: Optional[Dict[str, Any]]) -> Dict[str, int]:
+_BASE_SOLVER_KEYS = {"Nx", "Ny"}
+_NICKEL_SOLVER_KEYS = {"density_profile"}
+_DEFAULT_IA_R0_RSUN = 0.01
+
+
+def _normalize_density_profile(value: Any) -> str:
+    profile = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "uniform": "uniform",
+        "bpl": "broken_power_law",
+        "broken_power_law": "broken_power_law",
+        "exp": "exponential",
+        "exponential": "exponential",
+        "ia": "exponential",
+    }
+    if profile not in aliases:
+        raise ValueError(
+            "solver_kwargs['density_profile'] must be one of "
+            "'uniform', 'bpl'/'broken_power_law', or "
+            "'exp'/'exponential'/'ia'."
+        )
+    return aliases[profile]
+
+
+def _resolve_solver_kwargs(
+    solver_kwargs: Optional[Dict[str, Any]],
+    *,
+    model: Optional[str] = None,
+) -> Dict[str, Any]:
     opts = dict(solver_kwargs or {})
-    unknown = sorted(set(opts) - {"Nx", "Ny"})
-    if unknown:
-        raise KeyError(f"Unknown solver_kwargs key(s): {unknown}. Allowed: ['Nx', 'Ny']")
+    model_canonical = None
+    if model is not None:
+        model_canonical = canonical_model_name(model, warn_legacy=False)
 
-    out = {
+    allowed = set(_BASE_SOLVER_KEYS)
+    if model_canonical == "nickel":
+        allowed.update(_NICKEL_SOLVER_KEYS)
+
+    unknown = sorted(set(opts) - allowed)
+    if unknown:
+        raise KeyError(
+            f"Unknown solver_kwargs key(s) for model={model_canonical!r}: {unknown}. "
+            f"Allowed: {sorted(allowed)}"
+        )
+
+    out: Dict[str, Any] = {
         "Nx": int(opts.get("Nx", 100)),
         "Ny": int(opts.get("Ny", 1000)),
     }
-    for name, value in out.items():
+    for name in ("Nx", "Ny"):
+        value = out[name]
         if value <= 0:
             raise ValueError(f"solver_kwargs['{name}'] must be a positive integer.")
+
+    if model_canonical == "nickel":
+        if "density_profile" in opts:
+            out["density_profile"] = _normalize_density_profile(opts["density_profile"])
+
     return out
 
 
@@ -545,7 +629,7 @@ def lightcurve_bol(
     )
     engine = _get_engine(model)
     model_vector = _resolve_forward_params(model, params=params, allow_missing_tfloor=True)
-    solver = _resolve_solver_kwargs(solver_kwargs)
+    solver = _resolve_solver_kwargs(solver_kwargs, model=model)
     z = ctx.distance.get_z()
     t_s, Lbol, Teff, Rph = _solve_state(
         engine, model_vector, **solver, t_max_days_obs=t_max_days, z=z
@@ -589,7 +673,7 @@ def predict_bol(
     )
     engine = _get_engine(model)
     model_vector = _resolve_forward_params(model, params=params, allow_missing_tfloor=True)
-    solver = _resolve_solver_kwargs(solver_kwargs)
+    solver = _resolve_solver_kwargs(solver_kwargs, model=model)
     z = ctx.distance.get_z()
     t_s, Lbol, Teff, Rph = _solve_state(
         engine, model_vector, **solver, t_max_days_obs=t_max_days, z=z
@@ -656,7 +740,7 @@ def lightcurve_multiband(
 
     engine = _get_engine(model)
     model_vector = _resolve_forward_params(model, params=params, allow_missing_tfloor=False)
-    solver = _resolve_solver_kwargs(solver_kwargs)
+    solver = _resolve_solver_kwargs(solver_kwargs, model=model)
     DL_cm = ctx.distance.get_DL_cm()
     t_s, Lbol, Teff, Rph = _solve_state(
         engine, model_vector, **solver, t_max_days_obs=t_max_days, z=z
@@ -737,7 +821,7 @@ def predict_multiband(
 
     engine = _get_engine(model)
     model_vector = _resolve_forward_params(model, params=params, allow_missing_tfloor=False)
-    solver = _resolve_solver_kwargs(solver_kwargs)
+    solver = _resolve_solver_kwargs(solver_kwargs, model=model)
     DL_cm = ctx.distance.get_DL_cm()
     t_s, Lbol, Teff, Rph = _solve_state(
         engine, model_vector, **solver, t_max_days_obs=t_max_days, z=z
@@ -778,6 +862,7 @@ def predict_multiband(
 # -------------------------
 
 _DEFAULT_FIXED_MODEL_PARAMS = {
+    "nickel": {"delta": 0.0, "n": 10.0},
     "magnetar": {"f_mag": 0.2},
     "magnetar_ni": {"f_mag": 0.2},
 }
@@ -787,10 +872,21 @@ def _apply_default_fixed_model_params(
     model: str,
     priors_model: Optional[Dict[str, Any]],
     fixed_model: Optional[Dict[str, float]],
+    model_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, float]:
     fixed_out = dict(fixed_model or {})
     prior_names = set(dict(priors_model or {}).keys())
-    for name, value in _DEFAULT_FIXED_MODEL_PARAMS.get(str(model), {}).items():
+    model_canonical = canonical_model_name(model, warn_legacy=False)
+    defaults = dict(_DEFAULT_FIXED_MODEL_PARAMS.get(model_canonical, {}))
+    solver_kwargs = dict((model_kwargs or {}).get("solver_kwargs", {}) or {})
+    if model_canonical == "nickel":
+        density_profile = _normalize_density_profile(
+            solver_kwargs.get("density_profile", "uniform")
+        )
+        if density_profile == "exponential":
+            defaults["R_0"] = _DEFAULT_IA_R0_RSUN
+
+    for name, value in defaults.items():
         if name not in fixed_out and name not in prior_names:
             fixed_out[name] = float(value)
     return fixed_out
@@ -843,16 +939,24 @@ def _param_values_from_sample(
     return vals
 
 
-def _physical_constraints_lnprior(vals: Dict[str, float]) -> float:
+def _physical_constraints_lnprior(
+    vals: Dict[str, float],
+    *,
+    model: Optional[str] = None,
+) -> float:
     """
     Model-independent physical constraints that cannot be expressed as
     independent box priors.
     """
-    return -np.inf if _physical_constraint_reason(vals) is not None else 0.0
+    return -np.inf if _physical_constraint_reason(vals, model=model) is not None else 0.0
 
 
-def _validate_fixed_physical_constraints(fixed: Dict[str, float]) -> None:
-    reason = _physical_constraint_reason(fixed)
+def _validate_fixed_physical_constraints(
+    fixed: Dict[str, float],
+    *,
+    model: Optional[str] = None,
+) -> None:
+    reason = _physical_constraint_reason(fixed, model=model)
     if reason is not None:
         raise ValueError(f"Fixed physical constraints are invalid: {reason}")
 
@@ -866,6 +970,10 @@ def _validate_sampling_bounds_physical_constraints(names: Sequence[str], bounds:
             raise ValueError(f"Prior bounds for '{name}' must be >= 0.")
         if name in _UNIT_INTERVAL_PARAMS and (lo < 0.0 or hi > 1.0):
             raise ValueError(f"Prior bounds for '{name}' must stay within [0, 1].")
+        if name == "delta" and hi >= 3.0:
+            raise ValueError("Prior bounds for 'delta' must satisfy hi < 3.")
+        if name == "n" and lo <= 5.0:
+            raise ValueError("Prior bounds for 'n' must satisfy lo > 5.")
 
 
 def _assemble_model_params_from_values(
@@ -1239,6 +1347,7 @@ class _BolometricPredictor:
 
 @dataclass(frozen=True)
 class _FitLnProb:
+    model: str
     prior: MixedBoundsPrior
     names_samp: List[str]
     fixed: Dict[str, float]
@@ -1256,7 +1365,7 @@ class _FitLnProb:
             return -np.inf
 
         vals = _param_values_from_sample(sample_vec, self.names_samp, self.fixed)
-        lp_phys = _physical_constraints_lnprior(vals)
+        lp_phys = _physical_constraints_lnprior(vals, model=self.model)
         if not np.isfinite(lp_phys):
             return -np.inf
 
@@ -1390,7 +1499,11 @@ def _run_sampler(
 # Fit-time interpolation policy
 # -------------------------
 
-def _split_fit_model_kwargs(model_kwargs: Optional[Dict[str, Any]]):
+def _split_fit_model_kwargs(
+    model_kwargs: Optional[Dict[str, Any]],
+    *,
+    model: str,
+):
     """
     Extract prediction kwargs and interpolation fill policy used by fit lnprob.
 
@@ -1415,9 +1528,49 @@ def _split_fit_model_kwargs(model_kwargs: Optional[Dict[str, Any]]):
         if key in mk:
             solver_kwargs[key] = mk.pop(key)
     if solver_kwargs:
-        mk["solver_kwargs"] = _resolve_solver_kwargs(solver_kwargs)
+        mk["solver_kwargs"] = _resolve_solver_kwargs(solver_kwargs, model=model)
 
     return mk, fill
+
+
+def _validate_density_structure_fit_configuration(
+    *,
+    model: str,
+    priors: Optional[Dict[str, Any]],
+    fixed: Optional[Dict[str, float]],
+    model_kwargs: Dict[str, Any],
+) -> None:
+    if canonical_model_name(model, warn_legacy=False) != "nickel":
+        return
+
+    solver_kwargs = dict((model_kwargs or {}).get("solver_kwargs", {}) or {})
+    density_profile = str(solver_kwargs.get("density_profile", "uniform"))
+    if density_profile == "exponential" and "R_0" in dict(priors or {}):
+        raise ValueError(
+            "Nickel Ia/exponential density fixes R_0 instead of sampling it; "
+            "remove R_0 from priors and optionally override it through fixed."
+        )
+    if density_profile == "broken_power_law":
+        return
+
+    sampled_structure = sorted({"delta", "n"}.intersection(dict(priors or {})))
+    if sampled_structure:
+        raise ValueError(
+            f"Nickel BPL parameter prior(s) {sampled_structure} require "
+            "model_kwargs['solver_kwargs']['density_profile']='bpl'."
+        )
+
+    fixed_values = dict(fixed or {})
+    nondefault_fixed = []
+    if "delta" in fixed_values and float(fixed_values["delta"]) != 0.0:
+        nondefault_fixed.append("delta")
+    if "n" in fixed_values and float(fixed_values["n"]) != 10.0:
+        nondefault_fixed.append("n")
+    if nondefault_fixed:
+        raise ValueError(
+            f"Non-default nickel BPL fixed parameter(s) {nondefault_fixed} require "
+            "model_kwargs['solver_kwargs']['density_profile']='bpl'."
+        )
 
 
 def _t_shift_upper_for_fit(names_all: Sequence[str], bounds_all: np.ndarray, fixed: Dict[str, float]) -> float:
@@ -1511,7 +1664,16 @@ def fit_multiband(
     model_kwargs = dict(model_kwargs or {})
     if sed is None:
         sed = BlackbodySED()
-    model_kwargs_pred, interp_fill_fit = _split_fit_model_kwargs(model_kwargs)
+    model_kwargs_pred, interp_fill_fit = _split_fit_model_kwargs(
+        model_kwargs,
+        model=model,
+    )
+    _validate_density_structure_fit_configuration(
+        model=model,
+        priors=priors,
+        fixed=fixed,
+        model_kwargs=model_kwargs_pred,
+    )
     data = _apply_data_filter(data)
 
     # ---- data ----
@@ -1532,13 +1694,18 @@ def fit_multiband(
         priors,
         fixed,
     )
-    fixed_model = _apply_default_fixed_model_params(model, priors_model, fixed_model)
+    fixed_model = _apply_default_fixed_model_params(
+        model,
+        priors_model,
+        fixed_model,
+        model_kwargs_pred,
+    )
     priors_lin, priors_log10 = _split_prior_specs(priors_model)
     names_all, bounds_all = build_bounds(model, priors=priors_lin, include_t_shift=True)
     bounds_all, log_set_all = _apply_log10_priors(names_all, bounds_all, priors_log10)
     _validate_sampling_bounds_physical_constraints(names_all, bounds_all)
     names_samp, bounds_samp, fixed = _split_sampling(names_all, bounds_all, fixed=fixed_model)
-    _validate_fixed_physical_constraints(fixed)
+    _validate_fixed_physical_constraints(fixed, model=model)
     model_kwargs_pred, tmax_meta = _resolve_fit_t_max_days(
         model_kwargs_pred,
         t_obs=t_obs,
@@ -1591,6 +1758,7 @@ def fit_multiband(
         model_kwargs_pred=model_kwargs_pred,
     )
     lnprob = _FitLnProb(
+        model=model,
         prior=prior,
         names_samp=names_samp,
         fixed=fixed,
@@ -1682,7 +1850,16 @@ def fit_bol(
     )
     sampler_kwargs = dict(sampler_kwargs or {})
     model_kwargs = dict(model_kwargs or {})
-    model_kwargs_pred, interp_fill_fit = _split_fit_model_kwargs(model_kwargs)
+    model_kwargs_pred, interp_fill_fit = _split_fit_model_kwargs(
+        model_kwargs,
+        model=model,
+    )
+    _validate_density_structure_fit_configuration(
+        model=model,
+        priors=priors,
+        fixed=fixed,
+        model_kwargs=model_kwargs_pred,
+    )
     data = _apply_data_filter(data)
 
     t_obs = _as_1d_float(data.t_days, "data.t_days")
@@ -1697,7 +1874,12 @@ def fit_bol(
         priors,
         fixed,
     )
-    fixed_model = _apply_default_fixed_model_params(model, priors_model, fixed_model)
+    fixed_model = _apply_default_fixed_model_params(
+        model,
+        priors_model,
+        fixed_model,
+        model_kwargs_pred,
+    )
     priors_lin, priors_log10 = _split_prior_specs(priors_model)
     names_all, bounds_all = build_bounds(model, priors=priors_lin, include_t_shift=True)
     bounds_all, log_set_all = _apply_log10_priors(names_all, bounds_all, priors_log10)
@@ -1712,7 +1894,7 @@ def fit_bol(
     _validate_sampling_bounds_physical_constraints(names_all, bounds_all)
 
     names_samp, bounds_samp, fixed = _split_sampling(names_all, bounds_all, fixed=fixed_model)
-    _validate_fixed_physical_constraints(fixed)
+    _validate_fixed_physical_constraints(fixed, model=model)
     model_kwargs_pred, tmax_meta = _resolve_fit_t_max_days(
         model_kwargs_pred,
         t_obs=t_obs,
@@ -1737,6 +1919,7 @@ def fit_bol(
         model_kwargs_pred=model_kwargs_pred,
     )
     lnprob = _FitLnProb(
+        model=model,
         prior=prior,
         names_samp=names_samp,
         fixed=fixed,
