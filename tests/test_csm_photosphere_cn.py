@@ -150,20 +150,7 @@ def test_tau_photosphere_and_radiative_phases_retain_diffusion_cooling():
         result["R_ph"][following],
         params["R_in"] * result["x_sh"][following],
     )
-    cooling_thick = cooling & result["photosphere_optically_thick"]
-    expansion = result["expansion_factor"][cooling_thick]
-    tau_above_cooling = (
-        scales["tau_in"]
-        / expansion**2
-        * np.array(
-            [
-                _integral_power_law(x_ph, params["x_max"], -params["s"])
-                for x_ph in result["x_ph"][cooling_thick]
-            ]
-        )
-    )
-    assert np.allclose(tau_above_cooling, 2.0 / 3.0, rtol=2.0e-10)
-    assert np.all(result["R_ph"][cooling] <= result["R_out"][cooling])
+    assert np.allclose(result["R_ph"][cooling], result["R_out"][cooling])
     assert np.all(result["L_sh_heat_diffusion"][following] == 0.0)
     assert np.allclose(
         result["L_bol"][cooling], result["L_bol_diffusion"][cooling]

@@ -371,10 +371,9 @@ outward optical depth `tau=2/3`. Before the forward shock reaches that radius,
 the photosphere stays at the diffusion boundary. It then follows the forward
 shock until CSM exit. After exit, shock heating is switched off and the stored
 radiation continues through the source-free expanding Crank--Nicolson diffusion
-solver. The cooling luminosity is not replaced by an imposed power law. During
-this phase the `tau=2/3` photosphere is recomputed as the expanding CSM becomes
-optically thin. The time grid explicitly includes both physical transition
-times.
+solver. The cooling luminosity is not replaced by an imposed power law, while
+the emitting radius follows the homologously expanding CSM outer radius. The
+time grid explicitly includes both physical transition times.
 
 An optically thin CSM with total radial optical depth at or below `2/3` is
 outside this diffusion model. Forward calls raise a physical-domain error;
