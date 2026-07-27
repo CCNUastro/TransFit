@@ -29,8 +29,8 @@ def test_broken_power_law_integrals_match_direct_quadrature():
     x = np.linspace(x_min, x_max, 200_001)
     density = np.where(x < 1.0, x ** (-delta), x ** (-n))
 
-    assert i_mass == pytest.approx(np.trapz(x**2 * density, x), rel=2.0e-8)
-    assert i_kin == pytest.approx(np.trapz(x**4 * density, x), rel=2.0e-8)
+    assert i_mass == pytest.approx(np.trapezoid(x**2 * density, x), rel=2.0e-8)
+    assert i_kin == pytest.approx(np.trapezoid(x**4 * density, x), rel=2.0e-8)
 
 
 def test_exponential_integrals_match_direct_quadrature():
@@ -41,8 +41,8 @@ def test_exponential_integrals_match_direct_quadrature():
     x = np.linspace(x_min, x_max, 500_001)
     density = np.exp(-x)
 
-    assert i_mass == pytest.approx(np.trapz(x**2 * density, x), rel=2.0e-10)
-    assert i_kin == pytest.approx(np.trapz(x**4 * density, x), rel=2.0e-10)
+    assert i_mass == pytest.approx(np.trapezoid(x**2 * density, x), rel=2.0e-10)
+    assert i_kin == pytest.approx(np.trapezoid(x**4 * density, x), rel=2.0e-10)
 
 
 @pytest.mark.parametrize(
