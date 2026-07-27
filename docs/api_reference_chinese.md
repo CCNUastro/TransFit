@@ -32,10 +32,12 @@ rest-frame time 中求解，并在 API 边界转换回 observer frame。
 | `E_Th_in` | 初始热能，10^49 erg |
 | `M_ni` | 镍质量，M☉ |
 | `R_0` | 初始半径，R☉ |
-| `f_ni` | 镍混合位置，无量纲 |
+| `f_ni` | Ni 混合区外边界的拉格朗日质量坐标，M(<x_Ni)/M_ej |
 | `kappa` | optical opacity，cm^2 g^-1 |
 | `kappa_gamma` | gamma-ray opacity，cm^2 g^-1 |
 | `T_floor` | 温度下限，K |
+| `delta` | BPL 内层密度指数，无量纲 |
+| `n` | BPL 外层密度指数，无量纲 |
 
 ### `magnetar`
 
@@ -131,14 +133,24 @@ tf.MultiBandData(t_days, band, y, yerr, mask=None)
 Bolometric 正向计算：
 
 ```python
+params = {
+    **params,
+    "delta": 0.0,
+    "n": 10.0,
+}
+
 tf.lightcurve_bol(
     model="nickel",
     params=params,
     z=0.001728,
     t_max_days=150.0,
-    solver_kwargs=None,
+    solver_kwargs={"density_profile": "bpl"},
 )
 ```
+
+为保持向后兼容，默认值是 `density_profile="uniform"`。使用
+`"bpl"`/`"broken_power_law"` 选择破幂律，使用
+`"exp"`/`"exponential"`/`"ia"` 选择有限半径的 Ia 型指数密度。
 
 返回 `BolometricLC`，包含：
 
@@ -325,7 +337,84 @@ res = tf.fit_multiband(
 | `Nx` | `100` | 空间/网格分辨率参数 |
 | `Ny` | `1000` | 时间/网格分辨率参数 |
 
-二者都必须是正整数。初级示例刻意不暴露这些数值控制参数。
+`Nx` 和 `Ny` 都必须是正整数。
+
+对于 `nickel` 模型，`solver_kwargs` 还支持：
+
+| 键 | 默认值 | 含义 |
+|---|---|---|
+| `density_profile` | `"uniform"` | 密度结构：`"uniform"`、`"bpl"`/`"broken_power_law"` 或 `"exp"`/`"exponential"`/`"ia"`。 |
+
+`delta` 和 `n` 是 nickel 模型的物理参数，不属于求解器选项：
+
+| 参数 | 默认值 | 默认先验范围 | 含义 |
+|---|---:|---:|---|
+| `delta` | `0.0` | `[0.0, 2.9]` | BPL 内层密度指数，物理要求 `0 <= delta < 3`。 |
+| `n` | `10.0` | `[5.1, 14.0]` | BPL 外层密度指数，物理要求 `n > 5`。 |
+
+正向计算中若省略，默认使用 `delta=0`、`n=10`。在 `fit_bol` 和
+`fit_multiband` 中，即使选择 `density_profile="bpl"`，这两个参数默认也保持
+固定。只有用户显式把某个参数写入 `priors`，该参数才进入采样；写入 `fixed`
+则使用指定的固定值。uniform 和 exponential 模式不使用 `delta,n`，并拒绝
+对它们进行采样。
+
+BPL 使用拟合中的 `M_ej` 和 `v_ej` 归一化：在转折点 `x=1` 内侧
+`rho/rho_t = x**(-delta)`，外侧为 `x**(-n)`。
+扩散网格固定覆盖 `10^-3 <= x=v/v_t <= 3`；`v_max/v_t=3` 是内部常量，不能作为
+公开拟合选项。指数轮廓固定覆盖 `10^-3 <= x=r/R_e=v/v_e <= 12`，其中
+`R_e=R_0/12`。BPL 和指数轮廓采用 backward Euler，均匀密度采用
+Crank--Nicolson。
+
+三种轮廓都在初始外半径 `R_0` 截止。密度尺度和速度尺度由有限区间内的质量、
+动能积分共同确定，因此计算区域内严格恢复输入的 `M_ej` 和
+`E_K=0.5*M_ej*v_ej**2`，不再假设无穷远处还有抛射物质量。
+
+`f_ni` 定义为 Ni 混合区外边界的拉格朗日质量坐标：
+`f_ni=M(<x_Ni)/M_ej`。程序会根据 uniform、BPL 和指数密度轮廓分别反解
+对应的半径/速度坐标 `x_Ni`，在该截止位置以内采用常数 Ni 质量分数，并按密度
+加权的质量积分重新归一化，保证积分 Ni 质量仍为 `M_ni`。因此 `f_ni=0.8`
+表示计算区域内80%的抛射物质量，不一定满足 `x_Ni/x_max=0.8`。
+
+指数轮廓调用示例：
+
+```python
+tf.lightcurve_bol(
+    model="nickel",
+    params=params,
+    z=0.001728,
+    solver_kwargs={"density_profile": "ia"},
+)
+```
+
+在 `fit_bol` 和 `fit_multiband` 中，exponential/Ia 轮廓不采样 `R_0`，默认固定为
+白矮星半径 `R_0=0.01 R_sun`。用户可以用 `fixed={"R_0": value}` 覆盖默认值；
+如果把 `R_0` 放进 `priors`，接口会直接报错。模型时间网格从爆炸时刻 `t=0`
+开始，`R_0/v_max` 只作为膨胀时间尺度。
+
+对于纯放射性 Ia 模型（`E_Th_in=0`），回归参数下把固定半径从 `0.01` 改为
+`1 R_sun`，五天后的光度差异小于约 0.2%。若初始热能非零，最初几天可能对
+半径非常敏感，因此在激波冷却问题中不能认为两者总是等价。
+
+拟合时只在 `model_kwargs` 中选择 BPL，`delta,n` 默认仍固定：
+
+```python
+result = tf.fit_bol(
+    data=data,
+    model="nickel",
+    model_kwargs={"solver_kwargs": {"density_profile": "bpl"}},
+)
+
+assert "delta" not in result.param_names
+assert "n" not in result.param_names
+assert result.fixed["delta"] == 0.0
+assert result.fixed["n"] == 10.0
+```
+
+若要拟合密度指数，必须显式给出
+`priors={"delta": (0.0, 2.0), "n": (6.0, 12.0)}`；也可以只启用其中一个。
+两者都是连续实数参数，物理限制分别为 `0 <= delta < 3` 和 `n > 5`。
+完整的选择表、兼容行为和可复现图片见
+[v0.2 更新日志](changelog_chinese.md#v02--2026-07-26)。
 
 ## SED 选项
 

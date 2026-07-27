@@ -3,11 +3,13 @@ from __future__ import annotations
 import numpy as np
 
 # Canonical parameter order for NickelModel:
-# (M_ej, v_ej, E_Th_in, M_ni, R_0, f_ni, kappa, kappa_gamma, T_floor)
+# (M_ej, v_ej, E_Th_in, M_ni, R_0, f_ni, kappa, kappa_gamma,
+#  T_floor, delta, n)
 #
 # Backward compatibility:
 # - old pure-nickel calls that omit E_Th_in and R_0 are still accepted in
 #   forward-model helpers and mapped to E_Th_in=0, R_0=10 R_sun.
+# - existing parameter dictionaries that omit delta and n use delta=0, n=10.
 
 NICKEL_PARAM_NAMES = [
     "M_ej",         # Msun
@@ -15,10 +17,12 @@ NICKEL_PARAM_NAMES = [
     "E_Th_in",      # 1e49 erg
     "M_ni",         # Msun
     "R_0",          # R_sun
-    "f_ni",         # [0,1]
+    "f_ni",         # Lagrangian Ni-mixed ejecta mass fraction, [0,1]
     "kappa",        # cm^2/g
     "kappa_gamma",  # cm^2/g
     "T_floor",      # K
+    "delta",        # inner BPL density index
+    "n",            # outer BPL density index
 ]
 
 NICKEL_DEFAULT_BOUNDS = np.array([
@@ -31,6 +35,8 @@ NICKEL_DEFAULT_BOUNDS = np.array([
     [0.01,    0.5],      # kappa
     [0.001,   0.5],      # kappa_gamma
     [1000.0, 20000.0],   # T_floor
+    [0.0,     2.9],      # delta
+    [5.1,    14.0],      # n
 ], dtype=float)
 
 T_SHIFT_NAME = "t_shift"

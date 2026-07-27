@@ -386,12 +386,13 @@ loaded = tf.load(path)
 
 </details>
 
-完整说明见 [API 和参数参考](api_reference.md)。
+完整说明见 [API 和参数参考](api_reference_chinese.md)。
 
 ## 文档
 
 - [教程 notebook](../examples/tutorial.ipynb)
-- [API 和参数参考](api_reference.md)
+- [API 和参数参考](api_reference_chinese.md)
+- [更新日志](changelog_chinese.md)
 
 ## 联系方式
 

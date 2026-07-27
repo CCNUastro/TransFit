@@ -93,7 +93,19 @@ def test_public_nickel_and_magnetar_use_canonical_full_parameter_sets():
     magnetar_ni_names = tf.model_param_names("magnetar_ni")
     csm_names = tf.model_param_names("csm")
 
-    assert nickel_names == ["M_ej", "v_ej", "E_Th_in", "M_ni", "R_0", "f_ni", "kappa", "kappa_gamma", "T_floor"]
+    assert nickel_names == [
+        "M_ej",
+        "v_ej",
+        "E_Th_in",
+        "M_ni",
+        "R_0",
+        "f_ni",
+        "kappa",
+        "kappa_gamma",
+        "T_floor",
+        "delta",
+        "n",
+    ]
     assert magnetar_names == ["M_ej", "v_ej", "E_Th_in", "P_ms", "B14", "f_mag", "R_0", "kappa", "kappa_gamma", "T_floor"]
     assert magnetar_ni_names == ["M_ej", "v_ej", "P_ms", "B14", "f_mag", "M_ni", "f_ni", "kappa", "kappa_gamma", "T_floor"]
     assert csm_names == ["M_ej", "E_sn", "M_csm", "R_csm_out", "kappa", "s", "eps_sh", "T_floor"]
@@ -270,6 +282,19 @@ def test_physical_constraints_reject_ni_mass_larger_than_ejecta():
     assert _physical_constraints_lnprior({"M_ej": 1.0, "M_ni": 1.1}) == -np.inf
     assert _physical_constraints_lnprior({"M_ej": 1.0, "M_ni": 1.0}) == pytest.approx(0.0)
     assert _physical_constraints_lnprior({"M_ej": 1.0, "M_ni": 0.1}) == pytest.approx(0.0)
+    assert _physical_constraints_lnprior(
+        {"M_ej": 1.0, "M_ni": 0.3, "f_ni": 0.2},
+        model="nickel",
+    ) == -np.inf
+    assert _physical_constraints_lnprior(
+        {"M_ej": 1.0, "M_ni": 0.2, "f_ni": 0.2},
+        model="nickel",
+    ) == pytest.approx(0.0)
+    # This new constraint is specific to the nickel mass-coordinate model.
+    assert _physical_constraints_lnprior(
+        {"M_ej": 1.0, "M_ni": 0.3, "f_ni": 0.2},
+        model="magnetar_ni",
+    ) == pytest.approx(0.0)
     assert _physical_constraints_lnprior({"kappa": -0.1}) == -np.inf
     assert _physical_constraints_lnprior({"kappa_gamma": 0.0}) == -np.inf
     assert _physical_constraints_lnprior({"f_ni": 1.1}) == -np.inf

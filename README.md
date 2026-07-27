@@ -395,6 +395,7 @@ Full details are available in [API and parameter reference](docs/api_reference.m
 
 - [Tutorial notebook](examples/tutorial.ipynb)
 - [API and parameter reference](docs/api_reference.md)
+- [Changelog](docs/changelog.md)
 
 ## Contact
 
