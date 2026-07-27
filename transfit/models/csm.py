@@ -734,8 +734,6 @@ def _build_expansion_profile(y_grid, shock, p, scales):
     y_end = float(shock["y_end"])
     y_sh_end = float(shock["y_sh_end"])
     w_end = max(float(shock["w_end"]), 1.0e-10)
-    y_diff_end = float(shock["y_diff_end"])
-
     v_sh_end = scales["v_max"] * w_end
     t_sc = p["R_csm"] / v_sh_end
     cooling_rate = scales["t_d"] / t_sc
@@ -745,7 +743,6 @@ def _build_expansion_profile(y_grid, shock, p, scales):
     expansion_factor[after_end] = 1.0 + cooling_rate * (y_grid[after_end] - y_end)
     surface_beta = scales["beta_int"] * expansion_factor ** 2
     shock_active = y_grid <= (y_end + 1.0e-14)
-    diffusion_source_active = y_grid <= (y_diff_end + 1.0e-14)
 
     y_sh_grid = np.clip(y_grid / scales["y_in"], 1.0, y_sh_end)
     dense_state = _evaluate_shock_state(shock, y_sh_grid)
@@ -760,7 +757,6 @@ def _build_expansion_profile(y_grid, shock, p, scales):
         expansion_factor,
         surface_beta,
         shock_active,
-        diffusion_source_active,
         x_sh,
         z_sh,
         w_sh,
@@ -837,7 +833,6 @@ def _precompute_sources(
     p,
     scales,
     shock_active,
-    diffusion_source_active,
     x_sh,
     w_sh,
 ):
@@ -857,10 +852,9 @@ def _precompute_sources(
             * _rho_csm_of_x(x_sh[i], p, scales)
             * (scales["v_max"] * w_sh[i]) ** 3
         )
-        if diffusion_source_active[i]:
-            shock_source[i], A_sh[i] = _deposit_shock_source(
-                x_grid, float(x_sh[i]), float(w_sh[i]), p
-            )
+        shock_source[i], A_sh[i] = _deposit_shock_source(
+            x_grid, float(x_sh[i]), float(w_sh[i]), p
+        )
         L_sh_heat[i] = L_sh_heat_raw[i]
 
     return {
@@ -868,7 +862,7 @@ def _precompute_sources(
         "A_sh": A_sh,
         "L_sh_heat": L_sh_heat,
         "L_sh_heat_raw": L_sh_heat_raw,
-        "L_sh_heat_diffusion": np.where(diffusion_source_active, L_sh_heat_raw, 0.0),
+        "L_sh_heat_diffusion": L_sh_heat_raw.copy(),
     }
 
 
@@ -972,7 +966,7 @@ def _fast_pde_loop(
 
 
 def _compose_radiative_phases(t_s, L_diffusion, L_sh_heat, shock):
-    """Combine direct shock emission with the original diffusion cooling."""
+    """Classify radius phases without altering the diffusion luminosity."""
     t_s = np.asarray(t_s, dtype=float)
     L_diffusion = np.asarray(L_diffusion, dtype=float)
     L_sh_heat = np.asarray(L_sh_heat, dtype=float)
@@ -989,31 +983,10 @@ def _compose_radiative_phases(t_s, L_diffusion, L_sh_heat, shock):
 
     L_diffusion_at_breakout = float(np.interp(t_ph, t_s, L_diffusion_nonnegative))
     L_sh_heat_at_breakout = float(np.interp(t_ph, t_s, L_sh_heat_nonnegative))
-    matching_excess = L_diffusion_at_breakout - L_sh_heat_at_breakout
-
-    if L_diffusion_at_breakout > 1.0e-300:
-        diffusion_tail_weight = np.clip(
-            L_diffusion_nonnegative / L_diffusion_at_breakout,
-            0.0,
-            1.0,
-        )
-    else:
-        following_duration = max(t_out - t_ph, 1.0e-300)
-        diffusion_tail_weight = np.clip(
-            (t_out - t_s) / following_duration, 0.0, 1.0
-        )
-
-    matched_shock_following = np.maximum(
-        L_sh_heat_nonnegative + matching_excess * diffusion_tail_weight,
-        0.0,
-    )
-    L_emergent[shock_following_phase] = matched_shock_following[
-        shock_following_phase
-    ]
-
-    # Once the shock leaves the CSM, retain the source-free expanding diffusion
-    # solution.  Do not replace it with an imposed luminosity power law.
-    L_emergent[cooling_phase] = L_diffusion_nonnegative[cooling_phase]
+    # Crossing the tau=2/3 surface changes only the emitting radius.  Shock
+    # heating remains in the same diffusion equation until the forward shock
+    # exits the CSM, after which the same solver continues without a source.
+    diffusion_tail_weight = np.ones(t_s.size, dtype=float)
 
     phase_code = np.zeros(t_s.size, dtype=np.int8)
     phase_code[shock_following_phase] = 1
@@ -1027,7 +1000,7 @@ def _compose_radiative_phases(t_s, L_diffusion, L_sh_heat, shock):
         "diffusion_tail_weight": diffusion_tail_weight,
         "breakout_diffusion_luminosity": L_diffusion_at_breakout,
         "breakout_shock_luminosity": L_sh_heat_at_breakout,
-        "breakout_matching_excess": matching_excess,
+        "breakout_matching_excess": 0.0,
         "cooling_law": "source-free expanding Crank--Nicolson diffusion",
     }
 
@@ -1164,7 +1137,6 @@ class CSMModel:
             expansion_factor,
             surface_beta,
             shock_active,
-            diffusion_source_active,
             x_sh,
             z_sh,
             w_sh,
@@ -1176,7 +1148,6 @@ class CSMModel:
             p,
             scales,
             shock_active,
-            diffusion_source_active,
             x_sh,
             w_sh,
         )
@@ -1251,7 +1222,7 @@ class CSMModel:
         z_sh_out = z_sh[out]
         w_sh_out = w_sh[out]
         shock_active_out = shock_active[out]
-        diffusion_source_active_out = diffusion_source_active[out]
+        diffusion_source_active_out = shock_active_out.copy()
         expansion_factor_out = expansion_factor[out]
         e_hist_out = e_hist[out] if bool(return_full) else e_hist
 

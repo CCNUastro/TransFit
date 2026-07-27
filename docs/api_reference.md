@@ -369,11 +369,13 @@ For the `csm` model, `solver_kwargs` additionally accepts:
 In the default CSM `"tau"` mode, the diffusion boundary is the radius with
 outward optical depth `tau=2/3`. Before the forward shock reaches that radius,
 the photosphere stays at the diffusion boundary. It then follows the forward
-shock until CSM exit. After exit, shock heating is switched off and the stored
-radiation continues through the source-free expanding Crank--Nicolson diffusion
-solver. The cooling luminosity is not replaced by an imposed power law, while
-the emitting radius follows the homologously expanding CSM outer radius. The
-time grid explicitly includes both physical transition times.
+shock until CSM exit. Crossing the photosphere changes only the emitting radius;
+the same Crank--Nicolson diffusion luminosity and shock source continue without
+a separate direct-shock luminosity prescription. After exit, shock heating is
+switched off and the same solver evolves the stored radiation through
+source-free homologous expansion. The cooling luminosity is not replaced by an
+imposed power law, while the emitting radius follows the expanding CSM outer
+radius. The time grid explicitly includes both physical transition times.
 
 An optically thin CSM with total radial optical depth at or below `2/3` is
 outside this diffusion model. Forward calls raise a physical-domain error;

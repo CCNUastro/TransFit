@@ -151,10 +151,16 @@ def test_tau_photosphere_and_radiative_phases_retain_diffusion_cooling():
         params["R_in"] * result["x_sh"][following],
     )
     assert np.allclose(result["R_ph"][cooling], result["R_out"][cooling])
-    assert np.all(result["L_sh_heat_diffusion"][following] == 0.0)
     assert np.allclose(
-        result["L_bol"][cooling], result["L_bol_diffusion"][cooling]
+        result["L_sh_heat_diffusion"][following],
+        result["L_sh_heat_raw"][following],
     )
+    diffusion_nonnegative = result["L_bol_diffusion"] >= 0.0
+    assert np.array_equal(
+        result["L_bol"][diffusion_nonnegative],
+        result["L_bol_diffusion"][diffusion_nonnegative],
+    )
+    assert np.all(result["L_bol"][~diffusion_nonnegative] == 0.0)
     assert np.all(result["radiative_phase_code"][diffusion] == 0)
     assert np.all(result["radiative_phase_code"][following] == 1)
     assert np.all(result["radiative_phase_code"][cooling] == 2)
@@ -165,11 +171,7 @@ def test_tau_photosphere_and_radiative_phases_retain_diffusion_cooling():
     ) / dx
     assert np.allclose(boundary_residual, 0.0, rtol=1.0e-8, atol=1.0e-10)
 
-    assert result["breakout_shock_luminosity"] + result[
-        "breakout_matching_excess"
-    ] == pytest.approx(
-        result["breakout_diffusion_luminosity"], rel=1.0e-12
-    )
+    assert result["breakout_matching_excess"] == 0.0
     assert result["cooling_law"] == "source-free expanding Crank--Nicolson diffusion"
 
 
