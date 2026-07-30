@@ -108,7 +108,18 @@ def test_public_nickel_and_magnetar_use_canonical_full_parameter_sets():
     ]
     assert magnetar_names == ["M_ej", "v_ej", "E_Th_in", "P_ms", "B14", "f_mag", "R_0", "kappa", "kappa_gamma", "T_floor"]
     assert magnetar_ni_names == ["M_ej", "v_ej", "P_ms", "B14", "f_mag", "M_ni", "f_ni", "kappa", "kappa_gamma", "T_floor"]
-    assert csm_names == ["M_ej", "E_sn", "M_csm", "R_csm_out", "kappa", "s", "eps_sh", "T_floor"]
+    assert csm_names == [
+        "M_ej",
+        "E_sn",
+        "M_csm",
+        "R_csm_out",
+        "kappa",
+        "s",
+        "n",
+        "delta",
+        "eps_sh",
+        "T_floor",
+    ]
     assert tf.model_param_names("nickel", include_t_shift=True)[-1] == "t_shift"
     assert tf.model_param_names("magnetar_ni", include_t_shift=True)[-1] == "t_shift"
     assert tf.model_param_names("interaction") == csm_names
@@ -202,6 +213,92 @@ def test_csm_forward_api_outputs_positive_finite_bolometric_curve():
     )
     assert np.all(np.isfinite(pred))
     assert np.all(pred > 0.0)
+
+
+def test_csm_forward_defaults_match_explicit_ejecta_structure():
+    omitted = tf.lightcurve_bol(
+        model="csm",
+        params=PARAMS_CSM,
+        z=0.0,
+        t_max_days=20.0,
+        solver_kwargs={"Nx": 20, "Ny": 40},
+    )
+    explicit_params = dict(PARAMS_CSM)
+    explicit_params.update(n=10.0, delta=0.0)
+    explicit = tf.lightcurve_bol(
+        model="csm",
+        params=explicit_params,
+        z=0.0,
+        t_max_days=20.0,
+        solver_kwargs={"Nx": 20, "Ny": 40},
+    )
+
+    np.testing.assert_array_equal(omitted.t_days, explicit.t_days)
+    np.testing.assert_allclose(omitted.Lbol, explicit.Lbol, rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(omitted.Teff, explicit.Teff, rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(omitted.Rph, explicit.Rph, rtol=0.0, atol=0.0)
+
+    different_params = dict(PARAMS_CSM)
+    different_params.update(n=8.0, delta=1.0)
+    different = tf.lightcurve_bol(
+        model="csm",
+        params=different_params,
+        z=0.0,
+        t_max_days=20.0,
+        solver_kwargs={"Nx": 20, "Ny": 40},
+    )
+    different_on_default = np.interp(
+        omitted.t_days, different.t_days, different.Lbol
+    )
+    assert not np.allclose(omitted.Lbol, different_on_default, rtol=1.0e-3)
+
+
+def test_csm_fit_defaults_fix_structure_and_explicit_priors_sample_it(monkeypatch):
+    data = tf.BolometricData(
+        t_days=np.array([5.0, 10.0, 15.0], float),
+        y=np.array([1.0e42, 1.1e42, 9.0e41], float),
+        yerr=np.full(3, 1.0e41, dtype=float),
+    )
+    fixed = dict(PARAMS_CSM)
+    fixed.pop("T_floor")
+    fixed["t_shift"] = 0.0
+
+    def fake_default_sampler(*, sampler, lnprob, prior, sampler_kwargs):
+        assert list(prior.param_names) == []
+        assert lnprob.fixed["n"] == pytest.approx(10.0)
+        assert lnprob.fixed["delta"] == pytest.approx(0.0)
+        return np.empty((1, 0)), np.array([0.0]), {}, "fake"
+
+    monkeypatch.setattr(api, "_run_sampler", fake_default_sampler)
+    default_result = tf.fit_bol(data=data, model="csm", fixed=fixed)
+    assert default_result.fixed["n"] == pytest.approx(10.0)
+    assert default_result.fixed["delta"] == pytest.approx(0.0)
+
+    def fake_prior_sampler(*, sampler, lnprob, prior, sampler_kwargs):
+        assert list(prior.param_names) == ["n", "delta"]
+        np.testing.assert_allclose(
+            prior.bounds,
+            np.array([[7.0, 14.0], [0.0, 2.0]], dtype=float),
+        )
+        sample = np.array([8.5, 0.4], dtype=float)
+        return sample.reshape(1, 2), np.array([0.0]), {}, "fake"
+
+    monkeypatch.setattr(api, "_run_sampler", fake_prior_sampler)
+    sampled_result = tf.fit_bol(
+        data=data,
+        model="csm",
+        priors={"n": (7.0, 14.0), "delta": (0.0, 2.0)},
+        fixed=fixed,
+    )
+    assert sampled_result.best_params_raw["n"] == pytest.approx(8.5)
+    assert sampled_result.best_params_raw["delta"] == pytest.approx(0.4)
+
+    explicit_fixed = dict(fixed)
+    explicit_fixed.update(n=10.0, delta=0.0)
+    monkeypatch.setattr(api, "_run_sampler", fake_default_sampler)
+    fixed_result = tf.fit_bol(data=data, model="csm", fixed=explicit_fixed)
+    assert fixed_result.fixed["n"] == pytest.approx(10.0)
+    assert fixed_result.fixed["delta"] == pytest.approx(0.0)
 
 
 def test_csm_multiband_forward_uses_canonical_full_params():

@@ -505,9 +505,27 @@ def _solve_state(
     z: float,
     **solver_options,
 ):
+    from .models.csm import CSMModel
+
     t_max_days_rest = _observer_days_to_rest_days(t_max_days_obs, z)
+    engine_vector = tuple(model_vector)
+    if isinstance(engine, CSMModel):
+        values = _model_values_from_vector("csm", model_vector)
+        engine_vector = (
+            values["M_ej"],
+            values["E_sn"],
+            values["M_csm"],
+            values["R_csm_out"],
+            _CSM_INTERNAL_R_CSM_IN,
+            values["kappa"],
+            values["s"],
+            values["n"],
+            values["delta"],
+            values["eps_sh"],
+            values["T_floor"],
+        )
     return engine.calculate_light_curve(
-        model_vector,
+        engine_vector,
         Nx=Nx,
         Ny=Ny,
         t_max_days=t_max_days_rest,
@@ -517,7 +535,7 @@ def _solve_state(
 
 _BASE_SOLVER_KEYS = {"Nx", "Ny"}
 _NICKEL_SOLVER_KEYS = {"density_profile"}
-_CSM_SOLVER_KEYS = {"photosphere_mode"}
+_CSM_SOLVER_KEYS = {"photosphere_mode", "reverse_shock"}
 _DEFAULT_IA_R0_RSUN = 0.01
 
 
@@ -575,13 +593,21 @@ def _resolve_solver_kwargs(
     if model_canonical == "nickel":
         if "density_profile" in opts:
             out["density_profile"] = _normalize_density_profile(opts["density_profile"])
-    elif model_canonical == "csm" and "photosphere_mode" in opts:
-        photosphere_mode = str(opts["photosphere_mode"]).strip().lower()
-        if photosphere_mode not in {"tau", "outer"}:
-            raise ValueError(
-                "solver_kwargs['photosphere_mode'] must be 'tau' or 'outer'."
-            )
-        out["photosphere_mode"] = photosphere_mode
+    elif model_canonical == "csm":
+        if "photosphere_mode" in opts:
+            photosphere_mode = str(opts["photosphere_mode"]).strip().lower()
+            if photosphere_mode not in {"tau", "outer"}:
+                raise ValueError(
+                    "solver_kwargs['photosphere_mode'] must be 'tau' or 'outer'."
+                )
+            out["photosphere_mode"] = photosphere_mode
+        if "reverse_shock" in opts:
+            reverse_shock = opts["reverse_shock"]
+            if not isinstance(reverse_shock, (bool, np.bool_)):
+                raise TypeError(
+                    "solver_kwargs['reverse_shock'] must be a boolean."
+                )
+            out["reverse_shock"] = bool(reverse_shock)
 
     return out
 
@@ -874,6 +900,7 @@ def predict_multiband(
 
 _DEFAULT_FIXED_MODEL_PARAMS = {
     "nickel": {"delta": 0.0, "n": 10.0},
+    "csm": {"n": 10.0, "delta": 0.0},
     "magnetar": {"f_mag": 0.2},
     "magnetar_ni": {"f_mag": 0.2},
 }

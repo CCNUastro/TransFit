@@ -85,6 +85,8 @@ should use the canonical names.
 | `R_csm_out` | outer CSM radius, $R_\odot$ |
 | `kappa` | optical opacity, ${\rm cm^2\,g^{-1}}$ |
 | `s` | CSM density power-law index |
+| `n` | outer ejecta density power-law index |
+| `delta` | inner ejecta density power-law index |
 | `eps_sh` | shock radiation efficiency |
 | `T_floor` | temperature floor, K |
 
@@ -365,17 +367,63 @@ For the `csm` model, `solver_kwargs` additionally accepts:
 | Key | Default | Meaning |
 |---|---:|---|
 | `photosphere_mode` | `"tau"` | `"tau"` uses the optical-depth photosphere; `"outer"` retains the legacy outer-boundary/temperature-floor treatment. |
+| `reverse_shock` | `False` | Add reverse-shock heating to the forward-shock source. |
 
-In the default CSM `"tau"` mode, the diffusion boundary is the radius with
-outward optical depth `tau=2/3`. Before the forward shock reaches that radius,
-the photosphere stays at the diffusion boundary. It then follows the forward
-shock until CSM exit. Crossing the photosphere changes only the emitting radius;
-the same Crank--Nicolson diffusion luminosity and shock source continue without
-a separate direct-shock luminosity prescription. After exit, shock heating is
-switched off and the same solver evolves the stored radiation through
-source-free homologous expansion. The cooling luminosity is not replaced by an
-imposed power law, while the emitting radius follows the expanding CSM outer
-radius. The time grid explicitly includes both physical transition times.
+The reverse-shock option is enabled with:
+
+```python
+solver_kwargs={
+    "Nx": 100,
+    "Ny": 1000,
+    "reverse_shock": True,
+}
+```
+
+When enabled, the heating power is
+
+$$
+L_{\rm sh}=L_{\rm FS}+L_{\rm RS},\qquad
+L_{\rm RS}=2\pi\epsilon_{\rm sh}R_{\rm sh}^{2}\rho_{\rm ej}
+\left(v_{\rm ej}-v_{\rm sh}\right)^3.
+$$
+
+The reverse shock uses the same active interval, deposition position, numerical
+kernel, and diffusion treatment as the forward shock. The switch changes only
+the heating source; it does not change the thin-shell dynamics. With
+`return_full=True`, `L_forward_shock` and `L_reverse_shock` provide the two
+instantaneous heating powers separately.
+
+In the default CSM `"tau"` mode, the PDE grid always covers the complete CSM
+from `R_csm_in` to `R_csm_out`; the radius with outward optical depth `tau=2/3`
+is an internal photosphere, not the numerical outer boundary. Before the
+forward shock reaches it, the reported luminosity is the outward diffusive flux
+at that fixed photosphere. The emitting radius and flux-evaluation surface then
+follow the forward shock until CSM exit. The numerical shock source is deposited
+one `Nx=100` reference cell (1% of the full CSM width) downstream, leaving a
+source-free buffer in which the local outward flux is measured at the physical
+shock surface. After exit, shock heating is switched off and the complete
+full-CSM radiation-energy profile is handed to a separate
+source-free cooling solve. Its Rannacher-started Crank--Nicolson equation
+includes the homologous adiabatic loss `-4 (d ln a/dy) e` for the dimensionless
+energy density `e=E_rad/u0`, applied exactly through the integrating factor
+`q=a^4 e`. The cooling luminosity is evaluated at the expanding CSM outer
+boundary and is not replaced by an imposed power law. The time grid explicitly
+includes both physical transition times.
+
+The CSM ejecta structure uses a broken power law with outer index `n` and inner
+index `delta`. Forward calls default to `n=10` and `delta=0` when either value is
+omitted. Both parameters remain fixed at those values in `fit_bol` and
+`fit_multiband` unless the caller explicitly supplies a prior. Values supplied
+through `fixed` are also accepted. For example:
+
+```python
+priors = {
+    "n": (7.0, 14.0),
+    "delta": (0.0, 2.0),
+}
+```
+
+The physical constraints are `n > 5`, `n > s`, and `0 <= delta < 3`.
 
 An optically thin CSM with total radial optical depth at or below `2/3` is
 outside this diffusion model. Forward calls raise a physical-domain error;
@@ -393,7 +441,8 @@ model_kwargs={
 }
 ```
 
-`delta` and `n` are physical nickel-model parameters, not solver options:
+For the nickel model, `delta` and `n` are physical model parameters rather than
+solver options:
 
 | Parameter | Default | Default prior bounds | Meaning |
 |---|---:|---:|---|

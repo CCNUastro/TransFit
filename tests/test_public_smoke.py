@@ -45,6 +45,8 @@ def test_model_parameter_helpers_are_small_and_public():
         "R_csm_out",
         "kappa",
         "s",
+        "n",
+        "delta",
         "eps_sh",
         "T_floor",
     ]

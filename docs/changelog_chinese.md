@@ -8,6 +8,29 @@
 
 ### 本次更新
 
+- CSM 模型改为在光球面进行辐射，光球半径随正向激波位置演化：
+
+  $$
+  R_{\mathrm{ph}}(t)=
+  \begin{cases}
+  R_{\mathrm{CSM,ph}},
+  & R_{\mathrm{FS}}<R_{\mathrm{CSM,ph}},\\
+  R_{\mathrm{FS}}(t),
+  & R_{\mathrm{CSM,ph}}\le R_{\mathrm{FS}}<R_{\mathrm{CSM,out}},\\
+  a(t)R_{\mathrm{CSM,out}},
+  & R_{\mathrm{FS}}\ge R_{\mathrm{CSM,out}}.
+  \end{cases}
+  $$
+
+  其中 $a(t)$ 为激波穿出后的同模膨胀因子。
+
+- CSM 抛射物密度指数默认固定为 `n=10`、`delta=0`；也可以通过 `priors`
+  参与拟合，或通过 `fixed` 显式固定。
+- CSM 模型新增可选的反向激波加热；默认关闭，设置
+  `reverse_shock=True` 即可与正向激波一起进入扩散计算。
+
+- 改善了 CSM 关键阶段附近的时间采样，使冷却初期的快速光度变化更加
+  平滑、稳定。
 - Nickel 模型支持 `uniform`、`bpl`/`broken_power_law` 和
   `exponential`/`ia` 三种密度轮廓。
 - `R_0` 表示抛射物有限的初始外半径。

@@ -96,6 +96,7 @@ def _build_params(
     shock_kernel_cells,
     shock_kernel_width_Rsun,
     photosphere_mode,
+    reverse_shock,
 ):
     theta = tuple(theta)
     if len(theta) == 7:
@@ -130,9 +131,9 @@ def _build_params(
     else:
         raise ValueError(
             "CSMModel theta must have length 7, 8, 9, 10, or 11. "
-            "Use canonical order "
-            "(M_ej, E_sn, M_csm, R_csm_out, kappa, s, eps_sh, T_floor). "
-            "Advanced direct calls may include R_csm_in, n, and delta. "
+            "Public helpers accept named parameters. Advanced direct calls use "
+            "(M_ej, E_sn, M_csm, R_csm_out, R_csm_in, kappa, s, n, "
+            "delta, eps_sh[, T_floor]). "
             "Legacy shorter forms may omit s and/or T_floor."
         )
 
@@ -159,6 +160,7 @@ def _build_params(
         "shock_kernel_cells": int(shock_kernel_cells),
         "shock_kernel_width": float(shock_kernel_width_Rsun) * R_SUN,
         "photosphere_mode": str(photosphere_mode).strip().lower(),
+        "reverse_shock": reverse_shock,
     }
     p["x_max"] = p["R_csm"] / p["R_in"]
     _validate_params(p)
@@ -166,6 +168,8 @@ def _build_params(
 
 
 def _validate_params(p):
+    if not isinstance(p["reverse_shock"], (bool, np.bool_)):
+        raise TypeError("reverse_shock must be a boolean.")
     for name, value in p.items():
         if name in {
             "N_x",
@@ -173,6 +177,7 @@ def _validate_params(p):
             "shock_kernel_cells",
             "shock_ode_solver",
             "photosphere_mode",
+            "reverse_shock",
         }:
             continue
         if not np.isfinite(float(value)):
@@ -222,13 +227,16 @@ def _compute_csm_scales(p):
     else:
         x_diff_max = x_max
     R_diff = p["R_in"] * x_diff_max
-    boundary_tau = 2.0 / 3.0 if p["photosphere_mode"] == "tau" else 0.0
+    # The PDE always covers the complete CSM.  In tau mode R_diff is an
+    # internal luminosity/photosphere diagnostic, not the numerical boundary.
+    photosphere_tau = 2.0 / 3.0 if p["photosphere_mode"] == "tau" else 0.0
+    boundary_tau = 0.0
     eddington_extrapolation_tau = boundary_tau + 2.0 / 3.0
     surface_flux_factor = 1.0 / (3.0 * eddington_extrapolation_tau)
     beta_int = eddington_extrapolation_tau / (
-        tau_in * x_diff_max ** (-p["s"])
+        tau_in * x_max ** (-p["s"])
     )
-    t_d = 3.0 * p["kappa"] * rho_0 * R_diff ** 2 / C_LIGHT
+    t_d = 3.0 * p["kappa"] * rho_0 * p["R_csm"] ** 2 / C_LIGHT
 
     zeta = (p["n"] - 3.0) * (3.0 - p["delta_inner"])
     zeta /= 4.0 * PI * (p["n"] - p["delta_inner"])
@@ -256,7 +264,7 @@ def _compute_csm_scales(p):
         "rho_0": rho_0,
         "tau_in": tau_in,
         "tau_total": tau_total,
-        "tau_photosphere": boundary_tau,
+        "tau_photosphere": photosphere_tau,
         "boundary_tau": boundary_tau,
         "eddington_extrapolation_tau": eddington_extrapolation_tau,
         "surface_flux_factor": surface_flux_factor,
@@ -693,7 +701,55 @@ def _evaluate_shock_state(shock, y_sh_grid):
     return np.asarray(shock["solver"].sol(y_sh_grid), dtype=float)
 
 
-def _build_y_grid(y_start, y_end, y_max, n_steps, y_extra=None):
+def _coalesce_scaled_time_duplicates(y_grid, time_scale, protected_points):
+    """Merge y values separated by only a few physical-time ULPs.
+
+    Event points are preferred over ordinary base-grid points so removing a
+    machine-precision duplicate does not move a shock transition.
+    """
+    grid = np.asarray(y_grid, dtype=float)
+    scale = float(time_scale)
+    if not np.isfinite(scale) or scale <= 0.0:
+        raise ValueError("CSM time-grid scale must be positive and finite.")
+
+    scaled = grid * scale
+    protected = {float(value) for value in protected_points}
+    merged = [float(grid[0])]
+    merged_scaled = [float(scaled[0])]
+    for value, physical_time in zip(grid[1:], scaled[1:]):
+        value = float(value)
+        physical_time = float(physical_time)
+        previous_time = merged_scaled[-1]
+        separation = physical_time - previous_time
+        resolution = 4.0 * max(
+            abs(float(np.spacing(previous_time))),
+            abs(float(np.spacing(physical_time))),
+        )
+        if separation > resolution:
+            merged.append(value)
+            merged_scaled.append(physical_time)
+            continue
+        if separation < 0.0:
+            raise RuntimeError("Internal CSM physical time grid is decreasing.")
+        if value in protected and merged[-1] not in protected:
+            merged[-1] = value
+            merged_scaled[-1] = physical_time
+
+    out = np.asarray(merged, dtype=float)
+    if out.size < 2 or np.any(np.diff(out * scale) <= 0.0):
+        raise RuntimeError("Internal CSM physical time grid is not strictly increasing.")
+    return out
+
+
+def _build_y_grid(
+    y_start,
+    y_end,
+    y_max,
+    n_steps,
+    y_extra=None,
+    *,
+    time_scale=1.0,
+):
     """Build a strictly increasing grid with resolved physical transitions."""
     y_start = float(y_start)
     y_end = float(y_end)
@@ -717,14 +773,27 @@ def _build_y_grid(y_start, y_end, y_max, n_steps, y_extra=None):
         )
 
     pieces = [y_base, np.array([y_start, y_max], dtype=float)]
-    offsets = dy0 * np.array(
-        [-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0], dtype=float
+    # Resolve both sides of every radiative transition geometrically.  The
+    # state and flux are continuous when the shock source switches off, but
+    # the luminosity derivative changes abruptly and the outermost diffusion
+    # modes relax on a timescale much shorter than the global Ny spacing.
+    # Returning those early post-event points prevents that resolved transient
+    # from being drawn as a single discontinuous-looking jump.
+    positive_event_offsets = 2.0 ** np.arange(-12, 2, dtype=float)
+    event_offset_fractions = np.concatenate(
+        (-positive_event_offsets[::-1], np.array([0.0]), positive_event_offsets)
     )
+    offsets = dy0 * event_offset_fractions
     for boundary in boundaries:
         pieces.append(np.clip(boundary + offsets, y_start, y_max))
         pieces.append(np.array([boundary], dtype=float))
 
     y_grid = np.unique(np.concatenate(pieces))
+    y_grid = _coalesce_scaled_time_duplicates(
+        y_grid,
+        time_scale,
+        protected_points=[y_start, y_max, *boundaries],
+    )
     if y_grid.size < 2 or np.any(np.diff(y_grid) <= 0.0):
         raise RuntimeError("Internal CSM time grid is not strictly increasing.")
     return y_grid
@@ -763,11 +832,12 @@ def _build_expansion_profile(y_grid, shock, p, scales):
     )
 
 
-def _deposit_shock_source(x_grid, x_sh, w, p):
+def _deposit_shock_source(x_grid, x_sh, w, p, source_x=None):
     dx = float(x_grid[1] - x_grid[0])
     source = np.zeros_like(x_grid, dtype=float)
     n_cells = x_grid.size - 1
     A_sh = p["eps_sh"] * x_sh ** (-p["s"]) * max(float(w), 0.0) ** 3
+    deposit_x = float(x_sh if source_x is None else source_x)
     if A_sh == 0.0:
         return source, A_sh
 
@@ -781,14 +851,14 @@ def _deposit_shock_source(x_grid, x_sh, w, p):
         use_delta_kernel = kernel_cells <= 2
 
     if use_delta_kernel:
-        if x_sh <= x_grid[0]:
+        if deposit_x <= x_grid[0]:
             source[1] = A_sh / dx
-        elif x_sh >= x_grid[-1]:
+        elif deposit_x >= x_grid[-1]:
             source[n_cells - 1] = A_sh / dx
         else:
-            j = int(np.searchsorted(x_grid, x_sh, side="right") - 1)
+            j = int(np.searchsorted(x_grid, deposit_x, side="right") - 1)
             j = int(np.clip(j, 0, n_cells - 1))
-            theta = (x_sh - x_grid[j]) / dx
+            theta = (deposit_x - x_grid[j]) / dx
             source[j] += A_sh * (1.0 - theta) / dx
             source[j + 1] += A_sh * theta / dx
             if j == 0:
@@ -803,7 +873,9 @@ def _deposit_shock_source(x_grid, x_sh, w, p):
         valid_start = 1
         valid_stop = n_cells - 1
         width = min(kernel_cells, valid_stop - valid_start + 1)
-        center = int(np.argmin(np.abs(x_grid[valid_start : valid_stop + 1] - x_sh))) + valid_start
+        center = int(
+            np.argmin(np.abs(x_grid[valid_start : valid_stop + 1] - deposit_x))
+        ) + valid_start
         left = center - width // 2
         right = left + width - 1
         if left < valid_start:
@@ -814,7 +886,7 @@ def _deposit_shock_source(x_grid, x_sh, w, p):
             right = valid_stop
         indices = np.arange(left, right + 1)
         sigma_x = max(kernel_width_x, 0.5 * float(kernel_cells) * dx, 1.0e-300)
-        weights = np.exp(-0.5 * ((x_grid[indices] - x_sh) / sigma_x) ** 2)
+        weights = np.exp(-0.5 * ((x_grid[indices] - deposit_x) / sigma_x) ** 2)
         weight_norm = float(np.sum(x_grid[indices] ** 2 * weights) * dx)
         if weight_norm <= 0.0 or not np.isfinite(weight_norm):
             source[center] = A_sh / dx
@@ -827,6 +899,174 @@ def _deposit_shock_source(x_grid, x_sh, w, p):
     return source, A_sh
 
 
+@numba.njit(cache=True)
+def _searchsorted_right_numba(values, target):
+    low = 0
+    high = values.size
+    while low < high:
+        middle = (low + high) // 2
+        if target < values[middle]:
+            high = middle
+        else:
+            low = middle + 1
+    return low
+
+
+@numba.njit(cache=True)
+def _precompute_sources_numba(
+    x_grid,
+    shock_active,
+    x_sh,
+    y_sh,
+    source_x,
+    w_sh,
+    eps_sh,
+    s,
+    n,
+    delta_inner,
+    w_tr,
+    A1,
+    reverse_shock,
+    R_in,
+    rho_0,
+    v_max,
+    shock_kernel_cells,
+    kernel_width_x,
+):
+    """Build the complete shock source history without Python time loops."""
+    n_times = x_sh.size
+    n_points = x_grid.size
+    n_cells = n_points - 1
+    dx = x_grid[1] - x_grid[0]
+
+    shock_source = np.zeros((n_times, n_points), dtype=np.float64)
+    A_sh = np.zeros(n_times, dtype=np.float64)
+    A_forward = np.zeros(n_times, dtype=np.float64)
+    A_reverse = np.zeros(n_times, dtype=np.float64)
+    L_sh_heat_raw = np.zeros(n_times, dtype=np.float64)
+    L_forward_shock_raw = np.zeros(n_times, dtype=np.float64)
+    L_reverse_shock_raw = np.zeros(n_times, dtype=np.float64)
+
+    if kernel_width_x > 0.0:
+        kernel_cells = max(3, int(np.ceil(6.0 * kernel_width_x / dx)))
+        use_delta_kernel = False
+    else:
+        kernel_cells = shock_kernel_cells
+        use_delta_kernel = kernel_cells <= 2
+
+    for i in range(n_times):
+        if not shock_active[i]:
+            continue
+
+        x_value = x_sh[i]
+        y_value = max(y_sh[i], 1.0e-12)
+        deposit_value = source_x[i]
+        w_value = max(w_sh[i], 0.0)
+        forward_amplitude = eps_sh * x_value ** (-s) * w_value ** 3
+        reverse_amplitude = 0.0
+        if reverse_shock:
+            ejecta_speed = x_value / y_value
+            relative_speed = max(ejecta_speed - w_value, 0.0)
+            ejecta_density = _f_rho_ej_scalar_numba(
+                x_value, y_value, w_tr, n, delta_inner
+            )
+            reverse_amplitude = (
+                eps_sh * A1 * ejecta_density * relative_speed ** 3
+            )
+        amplitude = forward_amplitude + reverse_amplitude
+        A_sh[i] = amplitude
+        A_forward[i] = forward_amplitude
+        A_reverse[i] = reverse_amplitude
+        dimensional_factor = (
+            2.0 * PI * (R_in * x_value) ** 2 * rho_0 * v_max ** 3
+        )
+        L_forward_shock_raw[i] = dimensional_factor * forward_amplitude
+        L_reverse_shock_raw[i] = dimensional_factor * reverse_amplitude
+        L_sh_heat_raw[i] = dimensional_factor * amplitude
+        if amplitude == 0.0:
+            continue
+
+        if use_delta_kernel:
+            if deposit_value <= x_grid[0]:
+                shock_source[i, 1] = amplitude / dx
+            elif deposit_value >= x_grid[n_points - 1]:
+                shock_source[i, n_cells - 1] = amplitude / dx
+            else:
+                j = _searchsorted_right_numba(x_grid, deposit_value) - 1
+                if j < 0:
+                    j = 0
+                elif j > n_cells - 1:
+                    j = n_cells - 1
+                theta = (deposit_value - x_grid[j]) / dx
+                shock_source[i, j] += amplitude * (1.0 - theta) / dx
+                shock_source[i, j + 1] += amplitude * theta / dx
+                if j == 0:
+                    shock_source[i, 1] += shock_source[i, 0]
+                    shock_source[i, 0] = 0.0
+                if j + 1 == n_cells:
+                    shock_source[i, n_cells - 1] += shock_source[i, n_cells]
+                    shock_source[i, n_cells] = 0.0
+        elif n_cells <= 2:
+            shock_source[i, 1] = amplitude / dx
+        else:
+            valid_start = 1
+            valid_stop = n_cells - 1
+            width = min(kernel_cells, valid_stop - valid_start + 1)
+
+            center = valid_start
+            center_distance = abs(x_grid[center] - deposit_value)
+            for j in range(valid_start + 1, valid_stop + 1):
+                distance = abs(x_grid[j] - deposit_value)
+                if distance < center_distance:
+                    center = j
+                    center_distance = distance
+
+            left = center - width // 2
+            right = left + width - 1
+            if left < valid_start:
+                right += valid_start - left
+                left = valid_start
+            if right > valid_stop:
+                left -= right - valid_stop
+                right = valid_stop
+
+            sigma_x = max(kernel_width_x, 0.5 * float(kernel_cells) * dx, 1.0e-300)
+            weight_norm = 0.0
+            for j in range(left, right + 1):
+                weight = np.exp(
+                    -0.5 * ((x_grid[j] - deposit_value) / sigma_x) ** 2
+                )
+                weight_norm += x_grid[j] ** 2 * weight * dx
+
+            if weight_norm <= 0.0 or not np.isfinite(weight_norm):
+                shock_source[i, center] = amplitude / dx
+            else:
+                for j in range(left, right + 1):
+                    weight = np.exp(
+                        -0.5 * ((x_grid[j] - deposit_value) / sigma_x) ** 2
+                    )
+                    shock_source[i, j] = amplitude * x_value ** 2 * weight / weight_norm
+
+        physical_integral = 0.0
+        for j in range(n_points):
+            physical_integral += x_grid[j] ** 2 * shock_source[i, j]
+        physical_integral *= dx / max(x_value ** 2, 1.0e-300)
+        if physical_integral > 0.0 and np.isfinite(physical_integral):
+            factor = amplitude / physical_integral
+            for j in range(n_points):
+                shock_source[i, j] *= factor
+
+    return (
+        shock_source,
+        A_sh,
+        A_forward,
+        A_reverse,
+        L_sh_heat_raw,
+        L_forward_shock_raw,
+        L_reverse_shock_raw,
+    )
+
+
 def _precompute_sources(
     y_grid,
     x_grid,
@@ -835,34 +1075,62 @@ def _precompute_sources(
     shock_active,
     x_sh,
     w_sh,
+    source_x=None,
 ):
-    shock_source = np.zeros((y_grid.size, x_grid.size), dtype=float)
-    A_sh = np.zeros(y_grid.size, dtype=float)
-    L_sh_heat = np.zeros(y_grid.size, dtype=float)
-    L_sh_heat_raw = np.zeros(y_grid.size, dtype=float)
-
-    for i in range(y_grid.size):
-        if not shock_active[i]:
-            continue
-        L_sh_heat_raw[i] = (
-            p["eps_sh"]
-            * 2.0
-            * PI
-            * (p["R_in"] * x_sh[i]) ** 2
-            * _rho_csm_of_x(x_sh[i], p, scales)
-            * (scales["v_max"] * w_sh[i]) ** 3
-        )
-        shock_source[i], A_sh[i] = _deposit_shock_source(
-            x_grid, float(x_sh[i]), float(w_sh[i]), p
-        )
-        L_sh_heat[i] = L_sh_heat_raw[i]
+    n_times = np.asarray(y_grid).size
+    if not (
+        np.asarray(shock_active).size == n_times
+        and np.asarray(x_sh).size == n_times
+        and np.asarray(w_sh).size == n_times
+    ):
+        raise ValueError("CSM shock source histories must share the time-grid length.")
+    if source_x is None:
+        source_x_values = np.asarray(x_sh, dtype=float)
+    else:
+        source_x_values = np.asarray(source_x, dtype=float)
+        if source_x_values.size != n_times:
+            raise ValueError("CSM shock source positions must share the time-grid length.")
+    kernel_width_x = p["shock_kernel_width"] / p["R_in"]
+    y_sh_values = np.asarray(y_grid, dtype=float) / float(scales["y_in"])
+    (
+        shock_source,
+        A_sh,
+        A_forward,
+        A_reverse,
+        L_sh_heat_raw,
+        L_forward_shock_raw,
+        L_reverse_shock_raw,
+    ) = _precompute_sources_numba(
+        np.asarray(x_grid, dtype=float),
+        np.asarray(shock_active, dtype=np.bool_),
+        np.asarray(x_sh, dtype=float),
+        y_sh_values,
+        source_x_values,
+        np.asarray(w_sh, dtype=float),
+        float(p["eps_sh"]),
+        float(p["s"]),
+        float(p["n"]),
+        float(p["delta_inner"]),
+        float(scales["w_tr"]),
+        float(scales["A1"]),
+        bool(p["reverse_shock"]),
+        float(p["R_in"]),
+        float(scales["rho_0"]),
+        float(scales["v_max"]),
+        int(p["shock_kernel_cells"]),
+        float(kernel_width_x),
+    )
 
     return {
         "S_total": shock_source,
         "A_sh": A_sh,
-        "L_sh_heat": L_sh_heat,
+        "A_forward_shock": A_forward,
+        "A_reverse_shock": A_reverse,
+        "L_sh_heat": L_sh_heat_raw.copy(),
         "L_sh_heat_raw": L_sh_heat_raw,
         "L_sh_heat_diffusion": L_sh_heat_raw.copy(),
+        "L_forward_shock": L_forward_shock_raw,
+        "L_reverse_shock": L_reverse_shock_raw,
     }
 
 
@@ -897,7 +1165,9 @@ def _fast_pde_loop(
     coeff_imh_base,
     coeff_iph_base,
     dx,
-    Lfac,
+    luminosity_indices,
+    luminosity_weights,
+    luminosity_factors,
     store_history,
 ):
     n_times, n_pts = total_source.shape
@@ -956,11 +1226,165 @@ def _fast_pde_loop(
         b_diag[n_pts - 1] = 1.0 + beta / dx
 
         thomas_algorithm(a, b_diag, c_up, rhs, c_prime, d_prime, e_next)
-        L_bol[n] = Lfac * (e_next[n_pts - 2] - e_next[n_pts - 1])
+        luminosity_index = luminosity_indices[n]
+        luminosity_weight = luminosity_weights[n]
+        gradient = (1.0 - luminosity_weight) * (
+            e_next[luminosity_index] - e_next[luminosity_index + 1]
+        )
+        if luminosity_weight > 0.0 and luminosity_index < n_pts - 2:
+            gradient += luminosity_weight * (
+                e_next[luminosity_index + 1]
+                - e_next[luminosity_index + 2]
+            )
+        L_bol[n] = luminosity_factors[n] * gradient
         if store_history:
             e_hist[n, :] = e_next
 
         e_now, e_next = e_next, e_now
+
+    return L_bol, e_hist, e_now.copy()
+
+
+@numba.njit(fastmath=True, cache=True)
+def _fast_cooling_pde_loop(
+    dy_steps,
+    expansion_vals,
+    beta_vals,
+    initial_energy,
+    coeff_imh_base,
+    coeff_iph_base,
+    dx,
+    Lfac,
+    store_history,
+):
+    """Solve post-CSM diffusion with the homologous PdV loss integrated exactly.
+
+    In the comoving coordinate the dimensionless radiation energy density
+    ``e = E_rad/u0`` obeys
+
+        de/dy = a D[e] - 4 (d ln(a)/dy) e,
+
+    where ``y=t/t_d`` and ``a = R/R_breakout``.  Evolving the dimensionless
+    integrating-factor variable ``q = a**4 e`` removes only the analytically
+    known PdV term and gives
+
+        dq/dy = a D[q].
+
+    This retains the adiabatic loss exactly and avoids loss of accuracy after
+    ``e`` has fallen by many orders of magnitude.  A two-half-step Rannacher
+    start damps the source-switch discontinuity before standard CN stepping.
+    Stored histories are converted back to ``e``; dimensional energy density
+    is ``u0*e``.
+    """
+    n_times = expansion_vals.size
+    n_pts = initial_energy.size
+    n_inner = n_pts - 2
+
+    u_now = initial_energy.copy()
+    u_next = np.zeros(n_pts, dtype=np.float64)
+    L_bol = np.zeros(n_times, dtype=np.float64)
+    L_bol[0] = Lfac * (u_now[n_pts - 2] - u_now[n_pts - 1])
+
+    if store_history:
+        e_hist = np.zeros((n_times, n_pts), dtype=np.float64)
+        e_hist[0, :] = u_now
+    else:
+        e_hist = np.zeros((1, 1), dtype=np.float64)
+
+    a = np.zeros(n_pts, dtype=np.float64)
+    b_diag = np.zeros(n_pts, dtype=np.float64)
+    c_up = np.zeros(n_pts, dtype=np.float64)
+    rhs = np.zeros(n_pts, dtype=np.float64)
+    c_prime = np.zeros(n_pts, dtype=np.float64)
+    d_prime = np.zeros(n_pts, dtype=np.float64)
+
+    # The shock source switches off discontinuously at CSM exit.  Two
+    # backward-Euler half steps damp the unresolved high-frequency modes in
+    # that hand-off; subsequent steps retain second-order CN accuracy.
+    if n_times > 1:
+        dy_start = dy_steps[0]
+        half_dy_start = 0.5 * dy_start
+        expansion_start = expansion_vals[0]
+        expansion_finish = expansion_vals[1]
+        beta_start = beta_vals[0]
+        beta_finish = beta_vals[1]
+        for substep in range(2):
+            fraction = 0.5 * (substep + 1)
+            expansion_sub = expansion_start + fraction * (
+                expansion_finish - expansion_start
+            )
+            if substep == 0:
+                beta_sub = beta_start * (expansion_sub / expansion_start) ** 2
+            else:
+                beta_sub = beta_finish
+
+            a[:] = 0.0
+            b_diag[:] = 0.0
+            c_up[:] = 0.0
+            rhs[:] = 0.0
+            b_diag[0] = 1.0
+            c_up[0] = -1.0
+
+            for i in range(n_inner):
+                idx = i + 1
+                coeff_left = coeff_imh_base[i]
+                coeff_right = coeff_iph_base[i]
+                lower = -half_dy_start * expansion_sub * coeff_left
+                upper = -half_dy_start * expansion_sub * coeff_right
+                a[idx] = lower
+                b_diag[idx] = 1.0 - lower - upper
+                c_up[idx] = upper
+                rhs[idx] = u_now[idx]
+
+            a[n_pts - 1] = -beta_sub / dx
+            b_diag[n_pts - 1] = 1.0 + beta_sub / dx
+            thomas_algorithm(a, b_diag, c_up, rhs, c_prime, d_prime, u_next)
+            u_now, u_next = u_next, u_now
+
+        L_bol[1] = Lfac * (u_now[n_pts - 2] - u_now[n_pts - 1])
+        if store_history:
+            e_hist[1, :] = u_now / expansion_finish ** 4
+
+    for n in range(2, n_times):
+        dy = dy_steps[n - 1]
+        half_dy = 0.5 * dy
+        expansion_old = expansion_vals[n - 1]
+        expansion_new = expansion_vals[n]
+        beta = beta_vals[n]
+
+        a[:] = 0.0
+        b_diag[:] = 0.0
+        c_up[:] = 0.0
+        rhs[:] = 0.0
+
+        b_diag[0] = 1.0
+        c_up[0] = -1.0
+
+        for i in range(n_inner):
+            idx = i + 1
+            coeff_left = coeff_imh_base[i]
+            coeff_right = coeff_iph_base[i]
+            lower = -half_dy * expansion_new * coeff_left
+            upper = -half_dy * expansion_new * coeff_right
+            a[idx] = lower
+            b_diag[idx] = 1.0 - lower - upper
+            c_up[idx] = upper
+            diffusion_old = expansion_old * (
+                coeff_left * u_now[idx - 1]
+                - (coeff_left + coeff_right) * u_now[idx]
+                + coeff_right * u_now[idx + 1]
+            )
+            rhs[idx] = u_now[idx] + half_dy * diffusion_old
+
+        a[n_pts - 1] = -beta / dx
+        b_diag[n_pts - 1] = 1.0 + beta / dx
+
+        thomas_algorithm(a, b_diag, c_up, rhs, c_prime, d_prime, u_next)
+        L_bol[n] = Lfac * (u_next[n_pts - 2] - u_next[n_pts - 1])
+        if store_history:
+            e_hist[n, :] = u_next / expansion_new ** 4
+
+        u_now, u_next = u_next, u_now
 
     return L_bol, e_hist
 
@@ -984,8 +1408,9 @@ def _compose_radiative_phases(t_s, L_diffusion, L_sh_heat, shock):
     L_diffusion_at_breakout = float(np.interp(t_ph, t_s, L_diffusion_nonnegative))
     L_sh_heat_at_breakout = float(np.interp(t_ph, t_s, L_sh_heat_nonnegative))
     # Crossing the tau=2/3 surface changes only the emitting radius.  Shock
-    # heating remains in the same diffusion equation until the forward shock
-    # exits the CSM, after which the same solver continues without a source.
+    # heating remains in the interaction equation until the forward shock
+    # exits the CSM.  The post-CSM luminosity is supplied by the separate
+    # source-free cooling equation with homologous PdV losses.
     diffusion_tail_weight = np.ones(t_s.size, dtype=float)
 
     phase_code = np.zeros(t_s.size, dtype=np.int8)
@@ -1001,7 +1426,7 @@ def _compose_radiative_phases(t_s, L_diffusion, L_sh_heat, shock):
         "breakout_diffusion_luminosity": L_diffusion_at_breakout,
         "breakout_shock_luminosity": L_sh_heat_at_breakout,
         "breakout_matching_excess": 0.0,
-        "cooling_law": "source-free expanding Crank--Nicolson diffusion",
+        "cooling_law": "homologous Rannacher--Crank--Nicolson diffusion with exact PdV integrating factor",
     }
 
 
@@ -1041,8 +1466,13 @@ class CSMModel:
     """
     Pure CSM-interaction light-curve model.
 
-    Canonical theta order:
-    (M_ej, E_sn, M_csm, R_csm_out, kappa, s, eps_sh, T_floor)
+    Public API parameter order:
+    (M_ej, E_sn, M_csm, R_csm_out, kappa, s, n, delta, eps_sh, T_floor)
+
+    The public API inserts the internal R_csm_in value before calling this
+    engine. Advanced direct calls use:
+    (M_ej, E_sn, M_csm, R_csm_out, R_csm_in, kappa, s, n, delta, eps_sh,
+    T_floor)
 
     Units:
     - M_csm, M_ej: solar mass
@@ -1052,10 +1482,10 @@ class CSMModel:
     - s: CSM density power-law index
     - eps_sh: dimensionless
 
-    Public API fixed defaults:
+    Public API defaults:
     - R_csm_in = 100 R_sun
-    - n = 10
-    - delta = 0
+    - n = 10 and delta = 0 when omitted in forward calls
+    - n = 10 and delta = 0 are fixed in fits unless explicit priors are supplied
 
     Legacy shorter theta:
     (M_csm, M_ej, E_sn_51, R_in, R_csm, kappa, eps_sh)
@@ -1093,6 +1523,7 @@ class CSMModel:
         shock_kernel_cells=2,
         shock_kernel_width_Rsun=0.0,
         photosphere_mode="tau",
+        reverse_shock=False,
     ):
         return _build_params(
             theta,
@@ -1111,6 +1542,7 @@ class CSMModel:
             shock_kernel_cells,
             shock_kernel_width_Rsun,
             photosphere_mode,
+            reverse_shock,
         )
 
     def calculate_light_curve(self, theta, Nx=140, Ny=1000, t_max_days=150.0, return_full=False, **kwargs):
@@ -1119,15 +1551,14 @@ class CSMModel:
         scales = shock["scales"]
 
         y_max = max(p["t_max_days"] * DAY / scales["t_d"], shock["y_end"])
-        x_grid = np.linspace(
-            1.0, scales["x_diff_max"], p["N_x"] + 1, dtype=float
-        )
+        x_grid = np.linspace(1.0, p["x_max"], p["N_x"] + 1, dtype=float)
         y_grid = _build_y_grid(
             scales["y_in"],
             shock["y_end"],
             y_max,
             p["N_t"],
             y_extra=[shock["y_diff_end"]],
+            time_scale=scales["t_d"],
         )
         t_s = y_grid * scales["t_d"]
         dx = float(x_grid[1] - x_grid[0])
@@ -1142,6 +1573,16 @@ class CSMModel:
             w_sh,
         ) = _build_expansion_profile(y_grid, shock, p, scales)
 
+        # Deposit the forward and optional reverse-shock powers at the same
+        # thin-shell source position, one Nx=100 reference cell downstream of
+        # the forward-shock surface.  Both use the forward-shock activity mask;
+        # keeping the buffer at 1% of the full CSM width makes it
+        # resolution-independent (one cell for Nx=100, two for Nx=200).
+        shock_source_buffer_x = (p["x_max"] - 1.0) / 100.0
+        shock_source_x = np.maximum(
+            x_sh - shock_source_buffer_x, x_grid[0]
+        )
+
         sources = _precompute_sources(
             y_grid,
             x_grid,
@@ -1150,28 +1591,97 @@ class CSMModel:
             shock_active,
             x_sh,
             w_sh,
+            source_x=shock_source_x,
+        )
+
+        if p["photosphere_mode"] == "tau":
+            luminosity_x = np.where(
+                y_grid <= (shock["y_diff_end"] + 1.0e-14),
+                scales["x_diff_max"],
+                x_sh,
+            )
+        else:
+            luminosity_x = np.full(y_grid.shape, p["x_max"], dtype=float)
+        luminosity_x = np.clip(luminosity_x, 1.0, p["x_max"])
+        # Use the same fractional position as the two-node shock deposition to
+        # interpolate the two outward cell-face fluxes.  When the shock crosses
+        # a node, the old second face becomes the new first face continuously.
+        luminosity_indices = (
+            np.searchsorted(x_grid, luminosity_x, side="right") - 1
+        ).astype(np.int64)
+        luminosity_indices = np.clip(
+            luminosity_indices, 0, x_grid.size - 2
+        )
+        luminosity_weights = (
+            luminosity_x - x_grid[luminosity_indices]
+        ) / dx
+        luminosity_weights = np.clip(luminosity_weights, 0.0, 1.0)
+        at_outer_edge = luminosity_indices >= x_grid.size - 2
+        luminosity_weights[at_outer_edge] = 0.0
+        luminosity_factors = (
+            scales["L0"] * luminosity_x ** (2.0 + p["s"]) / dx
         )
 
         x_inner = x_grid[1:-1]
-        xi_sq = (1.0 / scales["x_diff_max"]) ** 2
+        xi_sq = (1.0 / p["x_max"]) ** 2
         dx_sq = dx ** 2
         coeff_imh_base = (x_inner - 0.5 * dx) ** (2.0 + p["s"]) / (xi_sq * x_inner ** 2 * dx_sq)
         coeff_iph_base = (x_inner + 0.5 * dx) ** (2.0 + p["s"]) / (xi_sq * x_inner ** 2 * dx_sq)
-        Lfac = (
-            scales["L0"] * scales["x_diff_max"] ** (2.0 + p["s"]) / dx
-        )
+        Lfac_cooling = scales["L0"] * p["x_max"] ** (2.0 + p["s"]) / dx
 
-        L_bol_diffusion, e_hist = _fast_pde_loop(
-            dy_steps,
-            expansion_factor.astype(float),
-            surface_beta.astype(float),
-            sources["S_total"].astype(float),
+        shock_end_index = int(np.searchsorted(y_grid, shock["y_end"]))
+        if not np.isclose(
+            y_grid[shock_end_index], shock["y_end"], rtol=0.0, atol=0.0
+        ):
+            raise RuntimeError("CSM time grid does not contain the shock exit event.")
+
+        # Stage 1: interaction diffusion.  The CSM is stationary and shock
+        # heating remains active through the exact outer-boundary event.
+        interaction_stop = shock_end_index + 1
+        L_interaction, e_hist_interaction, e_at_exit = _fast_pde_loop(
+            dy_steps[:shock_end_index],
+            np.ones(interaction_stop, dtype=float),
+            np.full(interaction_stop, scales["beta_int"], dtype=float),
+            sources["S_total"][:interaction_stop].astype(float),
             coeff_imh_base.astype(float),
             coeff_iph_base.astype(float),
             dx,
-            Lfac,
+            luminosity_indices[:interaction_stop],
+            luminosity_weights[:interaction_stop].astype(float),
+            luminosity_factors[:interaction_stop].astype(float),
             bool(return_full),
         )
+
+        # Stage 2: after the forward shock exits the CSM, pass the complete
+        # radiation-energy profile into a source-free homologous cooling solve.
+        # The exact integrating factor q=a**4 e applies the homologous PdV loss
+        # without sacrificing late-time numerical accuracy.
+        if shock_end_index < y_grid.size - 1:
+            cooling_expansion = expansion_factor[shock_end_index:].astype(float)
+            cooling_beta = surface_beta[shock_end_index:].astype(float)
+            L_cooling, e_hist_cooling = _fast_cooling_pde_loop(
+                dy_steps[shock_end_index:],
+                cooling_expansion,
+                cooling_beta,
+                e_at_exit,
+                coeff_imh_base.astype(float),
+                coeff_iph_base.astype(float),
+                dx,
+                Lfac_cooling,
+                bool(return_full),
+            )
+            L_bol_diffusion = np.concatenate(
+                (L_interaction, L_cooling[1:])
+            )
+            if bool(return_full):
+                e_hist = np.concatenate(
+                    (e_hist_interaction, e_hist_cooling[1:]), axis=0
+                )
+            else:
+                e_hist = e_hist_interaction
+        else:
+            L_bol_diffusion = L_interaction
+            e_hist = e_hist_interaction
         if p["photosphere_mode"] == "tau":
             radiative_phases = _compose_radiative_phases(
                 t_s,
@@ -1215,15 +1725,19 @@ class CSMModel:
         L_sh_heat_out = sources["L_sh_heat"][out]
         L_sh_heat_raw_out = sources["L_sh_heat_raw"][out]
         L_sh_heat_diffusion_out = sources["L_sh_heat_diffusion"][out]
+        L_forward_shock_out = sources["L_forward_shock"][out]
+        L_reverse_shock_out = sources["L_reverse_shock"][out]
         T_eff_out = T_eff[out]
         R_ph_out = R_ph[out]
         R_out_out = R_out[out]
         x_sh_out = x_sh[out]
         z_sh_out = z_sh[out]
         w_sh_out = w_sh[out]
+        shock_source_x_out = shock_source_x[out]
         shock_active_out = shock_active[out]
         diffusion_source_active_out = shock_active_out.copy()
         expansion_factor_out = expansion_factor[out]
+        luminosity_x_out = luminosity_x[out]
         e_hist_out = e_hist[out] if bool(return_full) else e_hist
 
         if return_full:
@@ -1240,12 +1754,17 @@ class CSMModel:
                 "L_sh_heat": L_sh_heat_out,
                 "L_sh_heat_raw": L_sh_heat_raw_out,
                 "L_sh_heat_diffusion": L_sh_heat_diffusion_out,
+                "L_forward_shock": L_forward_shock_out,
+                "L_reverse_shock": L_reverse_shock_out,
+                "reverse_shock": bool(p["reverse_shock"]),
                 "T_eff": T_eff_out,
                 "R_ph": R_ph_out,
                 "R_out": R_out_out,
                 "x_sh": x_sh_out,
                 "z_sh": z_sh_out,
                 "w_sh": w_sh_out,
+                "shock_source_x": shock_source_x_out,
+                "shock_source_buffer_x": float(shock_source_buffer_x),
                 "v_sh": scales["v_max"] * w_sh_out,
                 "shock_active": shock_active_out,
                 "diffusion_source_active": diffusion_source_active_out,
@@ -1277,6 +1796,7 @@ class CSMModel:
                     "beta_initial": scales["beta_int"],
                 },
                 "expansion_factor": expansion_factor_out,
+                "luminosity_x": luminosity_x_out,
                 "e_hist": e_hist_out,
             }
 
@@ -1296,6 +1816,7 @@ class CSMModel:
             "R_csm_out_Rsun": float(p["R_csm"] / R_SUN),
             "diffusion_boundary_crossing_day": float(shock["t_diff_end_days"]),
             "shock_end_day": float(shock["t_end_days"]),
+            "reverse_shock": bool(p["reverse_shock"]),
             "v_ej_mean_km_s": float(scales["v_ej_mean"] / 1.0e5),
         }
 
