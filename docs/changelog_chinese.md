@@ -10,19 +10,19 @@
 
 - CSM 模型改为在光球面进行辐射，光球半径随正向激波位置演化：
 
-  $$
-  R_{\mathrm{ph}}(t)=
-  \begin{cases}
-  R_{\mathrm{CSM,ph}},
-  & R_{\mathrm{FS}}<R_{\mathrm{CSM,ph}},\\
-  R_{\mathrm{FS}}(t),
-  & R_{\mathrm{CSM,ph}}\le R_{\mathrm{FS}}<R_{\mathrm{CSM,out}},\\
-  a(t)R_{\mathrm{CSM,out}},
-  & R_{\mathrm{FS}}\ge R_{\mathrm{CSM,out}}.
-  \end{cases}
-  $$
+```math
+R_{\mathrm{ph}}(t)=
+\begin{cases}
+R_{\mathrm{CSM,ph}},
+& R_{\mathrm{FS}}<R_{\mathrm{CSM,ph}},\\
+R_{\mathrm{FS}}(t),
+& R_{\mathrm{CSM,ph}}\le R_{\mathrm{FS}}<R_{\mathrm{CSM,out}},\\
+a(t)R_{\mathrm{CSM,out}},
+& R_{\mathrm{FS}}\ge R_{\mathrm{CSM,out}}.
+\end{cases}
+```
 
-  其中 $a(t)$ 为激波穿出后的同模膨胀因子。
+其中 $a(t)$ 为激波穿出后的同模膨胀因子。
 
 - CSM 抛射物密度指数默认固定为 `n=10`、`delta=0`；也可以通过 `priors`
   参与拟合，或通过 `fixed` 显式固定。

@@ -11,19 +11,19 @@ User-visible changes are recorded here, with the newest version first.
 - The CSM model now radiates from the photosphere, whose radius follows the
   forward-shock position:
 
-  $$
-  R_{\mathrm{ph}}(t)=
-  \begin{cases}
-  R_{\mathrm{CSM,ph}},
-  & R_{\mathrm{FS}}<R_{\mathrm{CSM,ph}},\\
-  R_{\mathrm{FS}}(t),
-  & R_{\mathrm{CSM,ph}}\le R_{\mathrm{FS}}<R_{\mathrm{CSM,out}},\\
-  a(t)R_{\mathrm{CSM,out}},
-  & R_{\mathrm{FS}}\ge R_{\mathrm{CSM,out}}.
-  \end{cases}
-  $$
+```math
+R_{\mathrm{ph}}(t)=
+\begin{cases}
+R_{\mathrm{CSM,ph}},
+& R_{\mathrm{FS}}<R_{\mathrm{CSM,ph}},\\
+R_{\mathrm{FS}}(t),
+& R_{\mathrm{CSM,ph}}\le R_{\mathrm{FS}}<R_{\mathrm{CSM,out}},\\
+a(t)R_{\mathrm{CSM,out}},
+& R_{\mathrm{FS}}\ge R_{\mathrm{CSM,out}}.
+\end{cases}
+```
 
-  Here, $a(t)$ is the homologous expansion factor after shock exit.
+Here, $a(t)$ is the homologous expansion factor after shock exit.
 
 - The CSM ejecta-density indices default to fixed values `n=10` and `delta=0`.
   They can be sampled through `priors` or set explicitly through `fixed`.
