@@ -11,15 +11,18 @@
 - CSM 模型改为在光球面进行辐射，光球半径随正向激波位置演化：
 
 ```math
-R_{\mathrm{ph}}(t)=
-\begin{cases}
-R_{\mathrm{CSM,ph}},
-& R_{\mathrm{FS}}<R_{\mathrm{CSM,ph}},\\
-R_{\mathrm{FS}}(t),
-& R_{\mathrm{CSM,ph}}\le R_{\mathrm{FS}}<R_{\mathrm{CSM,out}},\\
-a(t)R_{\mathrm{CSM,out}},
-& R_{\mathrm{FS}}\ge R_{\mathrm{CSM,out}}.
-\end{cases}
+R_{\mathrm{ph}}(t)=R_{\mathrm{CSM,ph}}
+\qquad \left(R_{\mathrm{FS}}<R_{\mathrm{CSM,ph}}\right)
+```
+
+```math
+R_{\mathrm{ph}}(t)=R_{\mathrm{FS}}(t)
+\qquad \left(R_{\mathrm{CSM,ph}}\le R_{\mathrm{FS}}<R_{\mathrm{CSM,out}}\right)
+```
+
+```math
+R_{\mathrm{ph}}(t)=a(t)R_{\mathrm{CSM,out}}
+\qquad \left(R_{\mathrm{FS}}\ge R_{\mathrm{CSM,out}}\right)
 ```
 
 其中 $a(t)$ 为激波穿出后的同模膨胀因子。
