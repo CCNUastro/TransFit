@@ -13,12 +13,12 @@ User-visible changes are recorded here, with the newest version first.
 
 ```math
 R_{\mathrm{ph}}(t)=R_{\mathrm{CSM,ph}}
-\qquad \left(R_{\mathrm{FS}}<R_{\mathrm{CSM,ph}}\right)
+\qquad \left(R_{\mathrm{FS}}\lt R_{\mathrm{CSM,ph}}\right)
 ```
 
 ```math
 R_{\mathrm{ph}}(t)=R_{\mathrm{FS}}(t)
-\qquad \left(R_{\mathrm{CSM,ph}}\le R_{\mathrm{FS}}<R_{\mathrm{CSM,out}}\right)
+\qquad \left(R_{\mathrm{CSM,ph}}\le R_{\mathrm{FS}}\lt R_{\mathrm{CSM,out}}\right)
 ```
 
 ```math
