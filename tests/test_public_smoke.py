@@ -5,7 +5,7 @@ import pytest
 
 import transfit as tf
 import transfit.api as api
-from transfit.constants import C_LIGHT, MPC
+from transfit.constants import C_LIGHT, M_SUN, MPC
 from transfit.modules.sed import BlackbodySED, CutoffBlackbodySED
 
 
@@ -94,6 +94,29 @@ def test_forward_bolometric_light_curve_is_finite():
     assert np.all(np.isfinite(lc.Rph))
 
 
+def test_nickel_bolometric_forward_is_independent_of_temperature_floor():
+    params_default = dict(PARAMS_NICKEL)
+    params_default.pop("T_floor")
+    default = tf.lightcurve_bol(
+        model="nickel",
+        params=params_default,
+        z=0.0,
+        t_max_days=100.0,
+        solver_kwargs={"Nx": 20, "Ny": 100},
+    )
+    explicit = tf.lightcurve_bol(
+        model="nickel",
+        params=dict(params_default, T_floor=4500.0),
+        z=0.0,
+        t_max_days=100.0,
+        solver_kwargs={"Nx": 20, "Ny": 100},
+    )
+
+    np.testing.assert_allclose(default.Lbol, explicit.Lbol, rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(default.Teff, explicit.Teff, rtol=0.0, atol=0.0, equal_nan=True)
+    np.testing.assert_allclose(default.Rph, explicit.Rph, rtol=0.0, atol=0.0, equal_nan=True)
+
+
 def test_public_api_can_select_uniform_bpl_and_exponential_density_profiles():
     common = dict(
         model="nickel",
@@ -168,6 +191,24 @@ def test_public_api_validates_model_specific_bpl_solver_options():
         {"density_profile": "exp"},
         model="nickel",
     )["density_profile"] == "exponential"
+    for removed_key, value in (
+        ("late_time_mode", "photospheric"),
+        ("transport_mode", "fld"),
+        ("fld_max_iterations", 8),
+        ("fld_tolerance", 1.0e-7),
+    ):
+        with pytest.raises(KeyError, match=removed_key):
+            api._resolve_solver_kwargs({removed_key: value}, model="nickel")
+    with pytest.raises(KeyError, match="late_time_mode"):
+        api._resolve_solver_kwargs(
+            {"late_time_mode": "instant"},
+            model="nickel",
+        )
+    with pytest.raises(KeyError, match="transport_mode"):
+        api._resolve_solver_kwargs(
+            {"transport_mode": "streaming"},
+            model="nickel",
+        )
     with pytest.raises(ValueError, match="density_profile"):
         api._resolve_solver_kwargs(
             {"density_profile": "powerlaw"},
@@ -218,6 +259,81 @@ def test_forward_multiband_light_curve_is_finite():
     assert set(lc.y) == {"B", "V"}
     assert np.all(np.isfinite(lc.y["B"]))
     assert np.all(np.isfinite(lc.y["V"]))
+
+
+def test_nickel_homologous_multiband_continues_after_physical_photosphere_is_thin():
+    params = {
+        "M_ej": 1.0,
+        "v_ej": np.sqrt(2.0e51 / M_SUN) / 1.0e9,
+        "E_Th_in": 1.0,
+        "M_ni": 0.2,
+        "R_0": 1.0,
+        "f_ni": 0.8,
+        "kappa": 0.1,
+        "kappa_gamma": 0.03,
+        "T_floor": 4500.0,
+        "delta": 0.0,
+        "n": 10.0,
+    }
+    lc = tf.lightcurve_multiband(
+        model="nickel",
+        params=params,
+        z=0.0,
+        distance_modulus=0.0,
+        filters={"g": "sdss.g", "r": "sdss.r", "i": "sdss.i"},
+        bands=["g", "r", "i"],
+        y_kind="mag",
+        mag_system="ab",
+        t_max_days=300.0,
+        solver_kwargs={
+            "Nx": 60,
+            "Ny": 600,
+            "density_profile": "exponential",
+        },
+    )
+
+    for band in lc.bands:
+        assert np.all(np.isfinite(lc.y[band]))
+
+    bolometric = tf.lightcurve_bol(
+        model="nickel",
+        params=params,
+        z=0.0,
+        t_max_days=300.0,
+        solver_kwargs={
+            "Nx": 60,
+            "Ny": 600,
+            "density_profile": "exponential",
+        },
+    )
+    assert np.any(~bolometric.photosphere_valid)
+    np.testing.assert_allclose(
+        bolometric.Lphotospheric + bolometric.Ldirect,
+        bolometric.Lbol,
+        rtol=0.0,
+        atol=0.0,
+    )
+    assert np.all(np.isnan(bolometric.Teff[~bolometric.photosphere_valid]))
+    assert np.all(np.isnan(bolometric.Rph[~bolometric.photosphere_valid]))
+    prediction = tf.predict_multiband(
+        model="nickel",
+        params=params,
+        z=0.0,
+        distance_modulus=0.0,
+        filters={"r": "sdss.r"},
+        t_days=np.array([50.0, 200.0]),
+        band=np.array(["r", "r"], dtype=object),
+        y_kind="mag",
+        mag_system="ab",
+        t_max_days=300.0,
+        solver_kwargs={
+            "Nx": 60,
+            "Ny": 600,
+            "density_profile": "exponential",
+        },
+    )
+    assert np.isfinite(prediction[0])
+    assert np.isfinite(prediction[1])
 
 
 def test_custom_effective_wavelength_filter_is_public():
@@ -341,6 +457,7 @@ def test_fit_multiband_bpl_samples_delta_and_n_when_priors_are_explicit(monkeypa
     monkeypatch.setattr(api, "_run_sampler", fake_run_sampler)
 
     fixed = dict(PARAMS_NICKEL)
+    fixed.pop("T_floor")
     fixed.pop("delta")
     fixed.pop("n")
     fixed["t_shift"] = 0.0
@@ -443,9 +560,12 @@ def test_fit_exponential_density_allows_fixed_radius_override_and_rejects_radius
 @pytest.mark.parametrize(
     ("density_profile", "expected_fixed"),
     [
-        ("uniform", {"delta": 0.0, "n": 10.0}),
-        ("bpl", {"delta": 0.0, "n": 10.0}),
-        ("ia", {"delta": 0.0, "n": 10.0, "R_0": 0.01}),
+        ("uniform", {"T_floor": 4500.0, "delta": 0.0, "n": 10.0}),
+        ("bpl", {"T_floor": 4500.0, "delta": 0.0, "n": 10.0}),
+        (
+            "ia",
+            {"T_floor": 4500.0, "delta": 0.0, "n": 10.0, "R_0": 0.01},
+        ),
     ],
 )
 def test_density_profile_controls_default_fixed_structure_parameters(

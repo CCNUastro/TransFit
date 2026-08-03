@@ -666,6 +666,7 @@ def test_fit_multiband_rejects_invalid_observation_mode_before_sampling(monkeypa
     monkeypatch.setattr(api, "_run_sampler", fail_run_sampler)
 
     fixed = dict(PARAMS_NI)
+    fixed.pop("T_floor")
     fixed["t_shift"] = 0.0
     data = tf.MultiBandData(
         t_days=np.array([1.0], float),
@@ -731,6 +732,7 @@ def test_public_forward_rejects_nonphysical_solver_output(monkeypatch):
             np.array([1.0e41, -1.0e40], float),
             np.array([6000.0, 6000.0], float),
             np.array([1.0e14, 1.1e14], float),
+            None,
         )
 
     monkeypatch.setattr(api, "_solve_state", fake_solve_state)
@@ -751,6 +753,7 @@ def test_fit_treats_nonphysical_solver_output_as_impossible(monkeypatch):
             np.array([1.0e41, np.nan], float),
             np.array([6000.0, 6000.0], float),
             np.array([1.0e14, 1.1e14], float),
+            None,
         )
 
     def fake_run_sampler(*, sampler, lnprob, prior, sampler_kwargs):
@@ -1388,6 +1391,7 @@ def test_fit_multiband_can_sample_sigma_int_as_likelihood_parameter(monkeypatch)
         yerr=np.array([0.05, 0.05, 0.05], float),
     )
     fixed = dict(PARAMS_NI)
+    fixed.pop("T_floor")
     fixed["t_shift"] = 0.0
 
     res = tf.fit_multiband(
@@ -1701,6 +1705,104 @@ def test_explicit_distance_and_extinction_roundtrip(tmp_path):
     assert loaded["ctx"]["distance"]["DL_cm"] is not None
     assert "B" in loaded["ctx"]["filters"]
     assert loaded["ctx"]["extinction"]["band_map"]["values_mag"]["B"] == pytest.approx(0.1)
+
+
+def test_nickel_homologous_temperature_floor_defaults_and_can_be_sampled():
+    model_kwargs, _ = api._split_fit_model_kwargs({}, model="nickel")
+    fixed = api._apply_default_fixed_model_params(
+        "nickel",
+        priors_model={},
+        fixed_model={},
+        model_kwargs=model_kwargs,
+    )
+    assert fixed["T_floor"] == pytest.approx(4500.0)
+
+    sampled = api._apply_default_fixed_model_params(
+        "nickel",
+        priors_model={"T_floor": (2000.0, 6000.0)},
+        fixed_model={},
+        model_kwargs=model_kwargs,
+    )
+    assert "T_floor" not in sampled
+
+
+def test_nickel_multiband_uses_default_homologous_temperature_floor():
+    params_default = dict(PARAMS_NI)
+    params_default.pop("T_floor")
+    params_explicit = dict(params_default, T_floor=4500.0)
+
+    curves = []
+    for params in (params_default, params_explicit):
+        curves.append(tf.lightcurve_multiband(
+            model="nickel",
+            params=params,
+            z=0.001728,
+            filters={"r": "sdss.r"},
+            bands=["r"],
+            y_kind="mag",
+            mag_system="ab",
+            t_max_days=5.0,
+            solver_kwargs={
+                "Nx": 20,
+                "Ny": 50,
+            },
+        ))
+
+    assert np.all(np.isfinite(curves[0].y["r"]))
+    np.testing.assert_allclose(curves[0].t_days, curves[1].t_days)
+    np.testing.assert_allclose(curves[0].y["r"], curves[1].y["r"], rtol=0.0, atol=0.0)
+
+
+def test_nickel_multiband_uses_the_bolometric_transport_grid():
+    bolometric = tf.lightcurve_bol(
+        model="nickel",
+        params=PARAMS_NI,
+        z=0.0,
+        t_max_days=30.0,
+        solver_kwargs={"Nx": 30, "Ny": 120, "density_profile": "bpl"},
+    )
+    curve = tf.lightcurve_multiband(
+        model="nickel",
+        params=PARAMS_NI,
+        z=0.0,
+        distance_modulus=0.0,
+        filters={"V": "johnson_cousins.V"},
+        bands=["V"],
+        y_kind="flux",
+        t_max_days=30.0,
+        solver_kwargs={"Nx": 30, "Ny": 120, "density_profile": "bpl"},
+    )
+
+    np.testing.assert_allclose(curve.t_days, bolometric.t_days, rtol=0.0, atol=0.0)
+
+
+def test_fully_thin_homologous_floor_has_constant_band_flux_per_lbol():
+    params = dict(PARAMS_NI, M_ej=1.0, R_0=1.0, f_ni=0.8, kappa=0.1)
+    solver = {"Nx": 60, "Ny": 600, "density_profile": "uniform"}
+    bolometric = tf.lightcurve_bol(
+        model="nickel",
+        params=params,
+        z=0.0,
+        t_max_days=300.0,
+        solver_kwargs=solver,
+    )
+    multiband = tf.lightcurve_multiband(
+        model="nickel",
+        params=params,
+        z=0.0,
+        distance_modulus=0.0,
+        filters={"r": "sdss.r"},
+        bands=["r"],
+        y_kind="flux",
+        t_max_days=300.0,
+        solver_kwargs=solver,
+    )
+    thin = ~bolometric.photosphere_valid
+    ratio = multiband.y["r"][thin] / bolometric.Lbol[thin]
+
+    assert np.any(thin)
+    assert np.all(np.isfinite(multiband.y["r"][thin]))
+    np.testing.assert_allclose(ratio, ratio[0], rtol=3.0e-14, atol=0.0)
 
 
 def test_legacy_context_is_upgraded_to_schema_one():

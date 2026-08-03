@@ -35,7 +35,7 @@ rest-frame time 中求解，并在 API 边界转换回 observer frame。
 | `f_ni` | Ni 混合区外边界的拉格朗日质量坐标，M(<x_Ni)/M_ej |
 | `kappa` | optical opacity，cm^2 g^-1 |
 | `kappa_gamma` | gamma-ray opacity，cm^2 g^-1 |
-| `T_floor` | 温度下限，K |
+| `T_floor` | Nickel 同模膨胀多波段黑体的温度地板；默认 4500 K |
 | `delta` | BPL 内层密度指数，无量纲 |
 | `n` | BPL 外层密度指数，无量纲 |
 
@@ -160,6 +160,12 @@ tf.lightcurve_bol(
 - `Lbol`
 - `Teff`
 - `Rph`
+- `Lphotospheric`：真实光球释放的光度
+- `Ldirect`：光球外沉积的功率
+- `photosphere_valid`：物理 `Teff/Rph` 的有效掩码
+
+Nickel 满足 `Lbol=Lphotospheric+Ldirect`。整个抛射物光学薄后，
+`Lphotospheric=0`、`photosphere_valid=False`，并且 `Teff/Rph` 为 `NaN`。
 
 多波段正向计算：
 
@@ -185,6 +191,33 @@ tf.lightcurve_multiband(
 - `t_days`
 - `bands`
 - `y[band]`
+
+Nickel 只保留一套生产多波段映射。它使用完整的物理输运光度和同模膨胀外半径：
+
+\[
+R_{\rm hom}=R_0+v_{\max}t,\qquad
+T_{\rm try}=\left(\frac{L_{\rm bol}}
+{4\pi\sigma R_{\rm hom}^2}\right)^{1/4}.
+\]
+
+当 `T_try > T_floor` 时使用 `(R_hom, T_try)`；否则固定 `T=T_floor`，并反算
+
+\[
+R_{\rm eff}=\left(\frac{L_{\rm bol}}
+{4\pi\sigma T_{\rm floor}^4}\right)^{1/2}.
+\]
+
+因此物理光球消失后多波段连续谱仍保持有限，同时不再引入单独的星云温度或
+SED 模式。
+
+AB 输出再使用
+
+\[
+m_{\rm AB}=-2.5\log_{10}\!\left(F_\nu/3631\,{\rm Jy}\right).
+\]
+
+本版本的内置滤波器是单频有效频率定义，只在 `nu_eff_hz` 处计算 SED，不积分
+throughput 曲线。保留的 Nickel 映射是连续谱近似，不计算星云发射线或波长相关光球。
 
 ### 滤波器定义
 
@@ -268,9 +301,10 @@ res = tf.fit_multiband(
 `fixed` 是参数名到固定值的映射。一般情况下，没有放在 `fixed` 里的模型参数会被采样，
 其范围来自默认边界或 `priors` 中用户给出的边界。
 
-有两个有意保留的例外。`fit_bol` 中的 `T_floor` 作为内部数值温度下限使用，
-不进入 bolometric 拟合采样状态。`magnetar` 和 `magnetar_ni` 中的 `f_mag`
-如果用户没有显式给先验，默认固定为 `0.2`；如果需要拟合它，需要给出
+有两个有意保留的例外。`fit_bol` 不包含 `T_floor`。Nickel 多波段拟合默认固定
+`T_floor=4500 K`，只有显式放入 `priors` 时才采样。`magnetar` 和
+`magnetar_ni` 中的 `f_mag` 如果用户没有显式给
+先验，默认固定为 `0.2`；如果需要拟合它，需要给出
 `priors={"f_mag": (...)}`，并且不要同时在 `fixed` 中固定它。
 
 ### `sigma_int`
@@ -341,11 +375,38 @@ res = tf.fit_multiband(
 
 `Nx` 和 `Ny` 都必须是正整数。
 
+Nickel 输运的 `Ny` 个输出/积分节点采用固定、嵌套的二次网格
+`t_i=t_max*(i/Ny)^2`。它在最初几天自动加密，同时仍只用 `Ny` 控制公开的
+时间分辨率；把 `Ny` 加倍时会完整保留粗网格的全部节点。
+
 对于 `nickel` 模型，`solver_kwargs` 还支持：
 
 | 键 | 默认值 | 含义 |
 |---|---|---|
 | `density_profile` | `"uniform"` | 密度结构：`"uniform"`、`"bpl"`/`"broken_power_law"` 或 `"exp"`/`"exponential"`/`"ia"`。 |
+
+Nickel 唯一的生产输运边界满足
+
+```text
+tau(q_ph -> 1) = 2/3。
+```
+
+与 `q_ph` 相交的网格层按 cut cell 精确积分。光球后退时暴露出的储存辐射会
+显式释放；内部面通量保持守恒；最外活动网格层的 sink 和输出光球光度使用同一个
+Marshak 通量。边界内外的放射性源积分严格相加为总 deposited power。整个
+抛射物的总光深小于 `2/3` 后，`Lbol` 等于 deposited heating，不使用任何
+经验性的尾部归一化。
+
+公开的物理光球为
+
+\[
+R_{\rm ph}=R_{\rm out}q_{\rm ph},\qquad
+T_{\rm ph}=\left(\frac{L_{\rm photospheric}}
+{4\pi\sigma R_{\rm ph}^2}\right)^{1/4}。
+\]
+
+这个物理量不加温度地板。原来的 Nickel 外边界、FLD 和后期模式别名不再是
+公开 solver 选项。
 
 对于 `csm` 模型，`solver_kwargs` 还支持：
 
@@ -432,10 +493,9 @@ model_kwargs={
 
 BPL 使用拟合中的 `M_ej` 和 `v_ej` 归一化：在转折点 `x=1` 内侧
 `rho/rho_t = x**(-delta)`，外侧为 `x**(-n)`。
-扩散网格固定覆盖 `10^-3 <= x=v/v_t <= 3`；`v_max/v_t=3` 是内部常量，不能作为
-公开拟合选项。指数轮廓固定覆盖 `10^-3 <= x=r/R_e=v/v_e <= 12`，其中
-`R_e=R_0/12`。BPL 和指数轮廓采用 backward Euler，均匀密度采用
-Crank--Nicolson。
+三种轮廓统一在 `10^-4 <= q=v/v_max=r/R_out <= 1` 上计算。BPL 的
+`q_t=v_t/v_max=1/3` 和指数轮廓的 `q_e=v_e/v_max=1/12` 全部写进
+`eta(q)`。移动光球计算中三种轮廓都采用 backward Euler。
 
 三种轮廓都在初始外半径 `R_0` 截止。密度尺度和速度尺度由有限区间内的质量、
 动能积分共同确定，因此计算区域内严格恢复输入的 `M_ej` 和
@@ -486,7 +546,7 @@ assert result.fixed["n"] == 10.0
 `priors={"delta": (0.0, 2.0), "n": (6.0, 12.0)}`；也可以只启用其中一个。
 两者都是连续实数参数，物理限制分别为 `0 <= delta < 3` 和 `n > 5`。
 完整的选择表、兼容行为和可复现图片见
-[v0.2 更新日志](changelog_chinese.md#v02--2026-07-26)。
+[v0.2.0 更新日志](changelog_chinese.md#v020--2026-07-31)。
 
 ## SED 选项
 

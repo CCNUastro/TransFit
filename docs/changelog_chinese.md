@@ -4,7 +4,7 @@
 
 [English version](changelog.md)
 
-## v0.2 — 2026-07-26
+## v0.2
 
 ### 本次更新
 
@@ -91,3 +91,111 @@ priors = {
 ### 热光变曲线
 
 ![三种密度轮廓对应的热光变曲线](assets/changelog/v0.2/nickel-density-profile-lightcurves.png)
+
+### Nickel 密度与光球计算
+
+三种密度结构统一写为
+
+```math
+\rho(q,t)=\rho_0\,\eta(q)f_R^{-3},\qquad
+q=\frac{r}{R_{\rm out}}=\frac{v}{v_{\max}},\qquad
+R_{\rm out}=R_0+v_{\max}t,\qquad
+f_R=\frac{R_{\rm out}}{R_0} .
+```
+
+其中
+
+```math
+\eta(q)=
+\begin{cases}
+1, & \mathrm{Uniform},\\
+(q/q_t)^{-\delta}, & \mathrm{BPL},\ q<q_t,\\
+(q/q_t)^{-n}, & \mathrm{BPL},\ q\ge q_t,\\
+\exp(-q/q_e), & \mathrm{Ia/exponential},
+\end{cases}
+\qquad q_t=\frac{1}{3},\quad q_e=\frac{1}{12}.
+```
+
+向外光深为
+
+```math
+\tau(q,t)=\frac{\kappa\rho_0R_0}{f_R^2}
+\int_q^1\eta(q')\,dq' .
+```
+
+物理光球由
+
+```math
+\tau(q_{\rm ph},t)=\frac{2}{3}
+```
+
+确定。光球内沉积参与扩散，光球外沉积直接逃逸，因此
+
+```math
+L_{\rm bol}=L_{\rm photospheric}+L_{\rm direct},\qquad
+R_{\rm ph}=R_{\rm out}q_{\rm ph},\qquad
+T_{\rm ph}=\left(\frac{L_{\rm photospheric}}
+{4\pi\sigma R_{\rm ph}^2}\right)^{1/4} .
+```
+
+总光深低于 $2/3$ 后，`photosphere_valid=False`、
+`Lphotospheric=0`、`Lbol=Ldirect`，并令物理 `Rph/Teff=NaN`。
+
+### Nickel 多波段
+
+有效温度的处理与原 Uniform 密度模型相同，使用同模膨胀黑体：
+
+```math
+R_{\rm hom}=R_0+v_{\max}t,\qquad
+T_{\rm try}=\left(\frac{L_{\rm bol}}
+{4\pi\sigma R_{\rm hom}^2}\right)^{1/4} .
+```
+
+最终黑体量和频谱为
+
+```math
+(T_{\rm BB},R_{\rm BB})=
+\begin{cases}
+(T_{\rm try},R_{\rm hom}), & T_{\rm try}>T_{\rm floor},\\
+\left(T_{\rm floor},\sqrt{L_{\rm bol}/(4\pi\sigma T_{\rm floor}^4)}\right),
+& T_{\rm try}\le T_{\rm floor},
+\end{cases}
+\qquad
+L_\nu=4\pi^2R_{\rm BB}^2B_\nu(T_{\rm BB}) .
+```
+
+### 调用方式
+
+```python
+# 可选："uniform"、"bpl" / "broken_power_law"、"ia" / "exponential"
+solver = {"Nx": 100, "Ny": 1000, "density_profile": "bpl"}
+
+bol = tf.lightcurve_bol(
+    model="nickel", params=params, z=0.001728,
+    solver_kwargs=solver,
+)
+
+multiband = tf.lightcurve_multiband(
+    model="nickel", params={**params, "T_floor": 4500.0},
+    z=0.001728,
+    filters={"B": "johnson_cousins.B", "V": "johnson_cousins.V"},
+    bands=["B", "V"], y_kind="mag", mag_system="ab",
+    solver_kwargs=solver,
+)
+
+bol_fit = tf.fit_bol(
+    data=bol_data, model="nickel", priors=bol_priors, fixed=bol_fixed,
+    model_kwargs={"solver_kwargs": solver},
+)
+
+multiband_fit = tf.fit_multiband(
+    data=multiband_data, model="nickel", z=0.001728,
+    filters={"B": "johnson_cousins.B", "V": "johnson_cousins.V"},
+    priors={**bol_priors, "T_floor": (3000.0, 10000.0)},
+    fixed=multiband_fixed,  # 不要在这里同时固定 T_floor
+    model_kwargs={"solver_kwargs": solver},
+)
+```
+
+`fit_bol` 不包含 `T_floor`；`fit_multiband` 默认固定 `T_floor=4500 K`，只有
+显式放入 `priors` 时才采样。

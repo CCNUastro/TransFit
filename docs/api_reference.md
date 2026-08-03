@@ -41,7 +41,7 @@ should use the canonical names.
 | `f_ni` | outer Lagrangian mass coordinate of the Ni-mixed region, $M(<x_{\rm Ni})/M_{\rm ej}$ |
 | `kappa` | optical opacity, ${\rm cm^2\,g^{-1}}$ |
 | `kappa_gamma` | gamma-ray opacity, ${\rm cm^2\,g^{-1}}$ |
-| `T_floor` | temperature floor, K |
+| `T_floor` | temperature floor for the Nickel homologous multi-band blackbody; defaults to 4500 K |
 | `delta` | inner BPL density index, dimensionless |
 | `n` | outer BPL density index, dimensionless |
 
@@ -172,6 +172,12 @@ Returns `BolometricLC` with:
 - `Lbol`
 - `Teff`
 - `Rph`
+- `Lphotospheric`: luminosity emerging from the physical photosphere
+- `Ldirect`: deposited power outside the photosphere
+- `photosphere_valid`: validity mask for physical `Teff` and `Rph`
+
+For nickel, `Lbol = Lphotospheric + Ldirect`. Once the ejecta is fully optical
+thin, `Lphotospheric=0`, `photosphere_valid=False`, and `Teff/Rph` are `NaN`.
 
 Multi-band forward call:
 
@@ -197,6 +203,44 @@ Returns `MultiBandLC` with:
 - `t_days`
 - `bands`
 - `y[band]`
+
+Nickel has one production multi-band mapping. It uses the complete physical
+transport luminosity and the homologous outer radius,
+
+\[
+R_{\rm hom}=R_0+v_{\max}t,\qquad
+T_{\rm try}=\left(\frac{L_{\rm bol}}
+{4\pi\sigma R_{\rm hom}^2}\right)^{1/4}.
+\]
+
+When `T_try > T_floor`, the blackbody uses `(R_hom, T_try)`. Otherwise it fixes
+`T=T_floor` and uses
+
+\[
+R_{\rm eff}=\left(\frac{L_{\rm bol}}
+{4\pi\sigma T_{\rm floor}^4}\right)^{1/2}.
+\]
+
+This keeps the multi-band continuum finite after the physical photosphere has
+disappeared, without introducing a separate nebular temperature or SED mode.
+
+The observer-frame conversion is
+
+\[
+F_{\nu,\rm obs}(\nu_{\rm obs})=
+\frac{(1+z)L_\nu[(1+z)\nu_{\rm obs}]}{4\pi D_L^2}.
+\]
+
+AB outputs then use
+
+\[
+m_{\rm AB}=-2.5\log_{10}\!\left(F_\nu/3631\,{\rm Jy}\right).
+\]
+
+The built-in filters in this release are monochromatic effective-frequency
+definitions. They evaluate the SED at `nu_eff_hz`; they do not integrate a
+throughput curve. The retained Nickel mapping is a continuum approximation and
+does not model nebular emission lines or wavelength-dependent photospheres.
 
 ### Filter Definitions
 
@@ -283,10 +327,12 @@ and `hi` are bounds in log10 space.
 supplied in `fixed` are sampled using their default bounds or the bounds supplied
 in `priors`.
 
-There are two intentional exceptions. In `fit_bol`, `T_floor` is kept as an
-internal numerical floor and is not part of the sampled bolometric fit state. In
-`magnetar` and `magnetar_ni`, `f_mag` defaults to a fixed value of `0.2` unless
-the user supplies an explicit prior for `f_mag` and does not also fix it.
+There are two intentional exceptions. In `fit_bol`, `T_floor` is not part of
+the sampled bolometric fit state. In Nickel multi-band fits, `T_floor` defaults
+to a fixed 4500 K and becomes sampled only when it is explicitly supplied in
+`priors`. In `magnetar`
+and `magnetar_ni`, `f_mag` defaults to a fixed value of `0.2` unless the user
+supplies an explicit prior for `f_mag` and does not also fix it.
 
 ### `sigma_int`
 
@@ -356,11 +402,41 @@ data and the allowed `t_shift` range.
 
 `Nx` and `Ny` must be positive integers.
 
+For Nickel transport, the `Ny` output/integration nodes use the fixed nested
+quadratic grid `t_i=t_max*(i/Ny)^2`. This concentrates resolution during the
+rapid first few days while keeping `Ny` as the only public time-grid control;
+doubling `Ny` retains every node of the coarser grid.
+
 For the `nickel` model, `solver_kwargs` additionally accepts:
 
 | Key | Default | Meaning |
 |---|---|---|
 | `density_profile` | `"uniform"` | Density structure: `"uniform"`, `"bpl"`/`"broken_power_law"`, or `"exp"`/`"exponential"`/`"ia"`. |
+
+The Nickel production transport boundary satisfies
+
+```text
+tau(q_ph -> 1) = 2/3.
+```
+
+The cell intersected by `q_ph` is integrated as a cut cell. Stored radiation
+exposed by the receding surface is released explicitly, internal face fluxes
+remain conservative, and the same Marshak flux is used both as the last-cell
+sink and reported photospheric luminosity. Radioactive source integrals below and
+above that boundary add exactly to the requested deposited power. Once the
+complete ejecta column is below `2/3`, `Lbol` equals the deposited heating; no
+empirical tail normalization is applied.
+
+The public physical photosphere is
+
+\[
+R_{\rm ph}=R_{\rm out}q_{\rm ph},\qquad
+T_{\rm ph}=\left(\frac{L_{\rm photospheric}}
+{4\pi\sigma R_{\rm ph}^2}\right)^{1/4}.
+\]
+
+No temperature floor is applied to this physical quantity. The old Nickel
+outer-boundary, FLD, and late-time aliases are not public solver modes.
 
 For the `csm` model, `solver_kwargs` additionally accepts:
 
@@ -458,10 +534,10 @@ reject attempts to sample them.
 
 The BPL is normalized using the sampled `M_ej` and `v_ej`, with
 `rho/rho_t = x**(-delta)` below the transition `x=1` and `x**(-n)` above it.
-The diffusion grid covers `10^-3 <= x=v/v_t <= 3`; `v_max/v_t=3` is fixed
-internally and is not a public fitting option. The exponential grid covers
-`10^-3 <= x=r/R_e=v/v_e <= 12`, with `R_e=R_0/12`. Both non-uniform
-profiles use backward Euler, while uniform density uses Crank--Nicolson.
+Every profile is evaluated on the same computational coordinate
+`10^-4 <= q=v/v_max=r/R_out <= 1`. The BPL scale `q_t=v_t/v_max=1/3` and
+the exponential scale `q_e=v_e/v_max=1/12` are encoded inside `eta(q)`.
+The moving-photosphere calculation uses backward Euler for all profiles.
 
 All three profiles are finite at the initial outer radius `R_0`. Their density
 and velocity scales are computed from finite-domain mass and kinetic-energy
@@ -516,7 +592,7 @@ To fit the density indices, opt in explicitly with
 `priors={"delta": (0.0, 2.0), "n": (6.0, 12.0)}`. Either parameter may be
 enabled independently. Both are continuous real values; the physical limits
 are `0 <= delta < 3` and `n > 5`.
-See the [v0.2 changelog](changelog.md#v02--2026-07-26) for the complete
+See the [v0.2.0 changelog](changelog.md#v020--2026-07-31) for the complete
 selection table, compatibility behavior, and reproducible figures.
 
 ## SED Choices

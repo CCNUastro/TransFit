@@ -10,6 +10,8 @@ import numpy as np
 # - old pure-nickel calls that omit E_Th_in and R_0 are still accepted in
 #   forward-model helpers and mapped to E_Th_in=0, R_0=10 R_sun.
 # - existing parameter dictionaries that omit delta and n use delta=0, n=10.
+# - T_floor is used only by the homologous multi-band blackbody mapping; it
+#   does not enter the bolometric transport solve.
 
 NICKEL_PARAM_NAMES = [
     "M_ej",         # Msun

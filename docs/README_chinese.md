@@ -22,7 +22,7 @@ bolometric 和多波段数据接口，并内置 nickel、magnetar、magnetar-plu
 
 ## 主要功能
 
-- 输出 bolometric 光度、有效温度和光球半径的物理光变模型。
+- 输出 bolometric 光度、有效温度和有效辐射半径的物理光变模型。
 - 支持流量或星等空间的多波段测光，包括滤光片、消光和 SED 设置。
 - 使用统一结果对象进行贝叶斯拟合，默认安装 `emcee`，也可选装 `zeus` 和
   `dynesty`。
@@ -65,7 +65,6 @@ params = {
     "f_ni": 0.2,
     "kappa": 0.12,
     "kappa_gamma": 0.03,
-    "T_floor": 4500.0,
 }
 
 lc = tf.lightcurve_bol(
@@ -81,6 +80,12 @@ plt.xlabel("Observer-frame time (days)")
 plt.ylabel("Bolometric luminosity (erg s$^{-1}$)")
 plt.show()
 ```
+
+Nickel 扩散网格终止于真实的 `tau=2/3` 光球。`lc.Lphotospheric` 是光球处
+释放的光度，`lc.Ldirect` 是光球外的沉积功率，并满足
+`lc.Lbol = lc.Lphotospheric + lc.Ldirect`。输出 `Rph` 和 `Teff` 是不加温度
+地板的灰光球物理量；整个抛射物光学薄后两者变为 `NaN`，但 `Lbol` 仍保持有限
+并跟随 deposited heating。
 
 <p align="center">
   <img src="lightcurve_bol.png" alt="Bolometric forward model example">
@@ -104,7 +109,6 @@ params = {
     "f_ni": 0.2,
     "kappa": 0.12,
     "kappa_gamma": 0.03,
-    "T_floor": 4500.0,
 }
 
 filters = {
@@ -133,6 +137,12 @@ plt.ylabel("Vega magnitude")
 plt.legend()
 plt.show()
 ```
+
+Nickel 多波段与物理光球 bolometric 输运共用同一套 `Lbol`，随后把完整
+`Lbol` 映射到同模膨胀半径 `R_hom=R_0+v_max*t`。黑体温度低于 `T_floor`
+后固定温度，并反算保持 `Lbol` 不变的有效半径。这仍是连续谱近似，不计算
+星云发射线。内置滤波器目前只在一个有效频率处计算 SED，尚未实现完整
+throughput 积分。
 
 `filters` 会把数据中的 band 标签映射到具体滤波器定义。内置滤波器使用字符串
 ID；自定义单点滤波器推荐使用有效波长：
@@ -267,7 +277,6 @@ res = tf.fit_multiband(
         "f_ni": 0.2,
         "kappa": 0.12,
         "kappa_gamma": 0.03,
-        "T_floor": 4500.0,
     },
     sampler_kwargs={"nwalkers": 32, "nsteps": 5000, "burnin": 1000, "thin": 10},
 )

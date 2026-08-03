@@ -20,7 +20,7 @@ from .model_registry import canonical_model_name, forward_param_defaults
 from .samplers import FitResult, run_emcee, run_zeus, run_dynesty
 from .priors import MixedBoundsPrior, build_bounds
 from .priors.nuisance import LIKELIHOOD_NUISANCE_PARAM_SPECS
-from transfit.constants import DAY, MPC, PC
+from transfit.constants import DAY, MPC, PC, PI, SIGMA_SB
 
 
 # -------------------------
@@ -212,6 +212,9 @@ class BolometricLC:
     Lbol: np.ndarray
     Teff: np.ndarray
     Rph: np.ndarray
+    Lphotospheric: np.ndarray
+    Ldirect: np.ndarray
+    photosphere_valid: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -353,10 +356,10 @@ def _model_vector_from_params(
 
     model_vector = []
     for n in names:
-        if n == "T_floor" and n not in values and allow_missing_tfloor:
-            model_vector.append(_BOL_INTERNAL_T_FLOOR)
-        elif n not in values and n in defaults:
+        if n not in values and n in defaults:
             model_vector.append(float(defaults[n]))
+        elif n == "T_floor" and n not in values and allow_missing_tfloor:
+            model_vector.append(_BOL_INTERNAL_T_FLOOR)
         else:
             model_vector.append(float(values[n]))
     return tuple(model_vector)
@@ -508,6 +511,21 @@ def _solve_state(
     from .models.csm import CSMModel
 
     t_max_days_rest = _observer_days_to_rest_days(t_max_days_obs, z)
+    if hasattr(engine, "calculate_transport"):
+        transport = engine.calculate_transport(
+            model_vector,
+            Nx=Nx,
+            Ny=Ny,
+            t_max_days=t_max_days_rest,
+            **solver_options,
+        )
+        return (
+            transport.t_s,
+            transport.Lbol,
+            transport.Tph,
+            transport.Rph,
+            transport,
+        )
     engine_vector = tuple(model_vector)
     if isinstance(engine, CSMModel):
         values = _model_values_from_vector("csm", model_vector)
@@ -524,13 +542,14 @@ def _solve_state(
             values["eps_sh"],
             values["T_floor"],
         )
-    return engine.calculate_light_curve(
+    t_s, Lbol, Teff, Rph = engine.calculate_light_curve(
         engine_vector,
         Nx=Nx,
         Ny=Ny,
         t_max_days=t_max_days_rest,
         **solver_options,
     )
+    return t_s, Lbol, Teff, Rph, None
 
 
 _BASE_SOLVER_KEYS = {"Nx", "Ny"}
@@ -624,10 +643,93 @@ def _require_positive_finite(name: str, arr: np.ndarray) -> None:
         )
 
 
-def _validate_solved_state(Lbol, Teff, Rph) -> None:
+def _validate_solved_state(Lbol, Teff, Rph, photosphere_valid=None) -> None:
     _require_positive_finite("Lbol", Lbol)
-    _require_positive_finite("Teff", Teff)
-    _require_positive_finite("Rph", Rph)
+    if photosphere_valid is None:
+        _require_positive_finite("Teff", Teff)
+        _require_positive_finite("Rph", Rph)
+        return
+
+    valid = np.asarray(photosphere_valid, bool)
+    temperature = np.asarray(Teff, float)
+    radius = np.asarray(Rph, float)
+    if valid.shape != temperature.shape or valid.shape != radius.shape:
+        raise _NonPhysicalModelOutput(
+            "photosphere_valid, Teff, and Rph must have the same shape."
+        )
+    if np.any(~np.isfinite(temperature[valid])) or np.any(temperature[valid] < 0.0):
+        raise _NonPhysicalModelOutput(
+            "Model produced invalid Teff on a valid photosphere."
+        )
+    if np.any(~np.isfinite(radius[valid])) or np.any(radius[valid] <= 0.0):
+        raise _NonPhysicalModelOutput(
+            "Model produced invalid Rph on a valid photosphere."
+        )
+    if np.any(~np.isnan(temperature[~valid])) or np.any(~np.isnan(radius[~valid])):
+        raise _NonPhysicalModelOutput(
+            "Invalid photosphere epochs must use NaN Teff and Rph."
+        )
+
+
+def _nickel_homologous_blackbody(transport, T_floor: float):
+    """Map the physical-photosphere Nickel Lbol to a homologous blackbody."""
+    floor = float(T_floor)
+    if not np.isfinite(floor) or floor <= 0.0:
+        raise ValueError("T_floor must be finite and > 0 for homologous emission.")
+    luminosity = np.asarray(transport.Lbol, float)
+    radius_hom = np.asarray(transport.Rhom, float)
+    temperature_try = (
+        luminosity / (4.0 * PI * SIGMA_SB * radius_hom**2)
+    ) ** 0.25
+    radius_floor = np.sqrt(
+        luminosity / (4.0 * PI * SIGMA_SB * floor**4)
+    )
+    above_floor = temperature_try > floor
+    temperature = np.where(above_floor, temperature_try, floor)
+    radius = np.where(above_floor, radius_hom, radius_floor)
+    return temperature, radius
+
+
+def _evaluate_multiband_solved_state(
+    *,
+    model: str,
+    model_vector,
+    transport,
+    Teff,
+    Rph,
+    sed,
+    filter_map,
+    bands,
+    DL_cm: float,
+    z: float,
+    y_kind: str,
+    mag_system: str,
+    extinction,
+):
+    """Apply the single production SED mapping to a solved transport state."""
+    if model == "nickel":
+        if transport is None:
+            raise _NonPhysicalModelOutput("Nickel transport state is unavailable.")
+        values = _model_values_from_vector(model, model_vector)
+        temperature, radius = _nickel_homologous_blackbody(
+            transport,
+            values["T_floor"],
+        )
+    else:
+        temperature = np.asarray(Teff, float)
+        radius = np.asarray(Rph, float)
+    return evaluate_multiband_observer_output(
+        sed=sed,
+        filter_map=filter_map,
+        bands=bands,
+        Teff_K=temperature,
+        R_cm=radius,
+        DL_cm=DL_cm,
+        z=z,
+        y_kind=y_kind,
+        mag_system=mag_system,
+        extinction=extinction,
+    )
 
 
 def _t_grid_days_from_ts(t_s: np.ndarray, z: float) -> np.ndarray:
@@ -668,16 +770,30 @@ def lightcurve_bol(
     model_vector = _resolve_forward_params(model, params=params, allow_missing_tfloor=True)
     solver = _resolve_solver_kwargs(solver_kwargs, model=model)
     z = ctx.distance.get_z()
-    t_s, Lbol, Teff, Rph = _solve_state(
+    t_s, Lbol, Teff, Rph, transport = _solve_state(
         engine, model_vector, **solver, t_max_days_obs=t_max_days, z=z
     )
-    _validate_solved_state(Lbol, Teff, Rph)
+    photosphere_valid = (
+        np.asarray(transport.photosphere_valid, bool)
+        if transport is not None
+        else np.ones(np.asarray(Lbol).shape, dtype=bool)
+    )
+    _validate_solved_state(Lbol, Teff, Rph, photosphere_valid if transport is not None else None)
     t_days = _t_grid_days_from_ts(t_s, z=z)
+    if transport is not None:
+        Lphotospheric = np.asarray(transport.Lphotospheric, float)
+        Ldirect = np.asarray(transport.Ldirect, float)
+    else:
+        Lphotospheric = np.asarray(Lbol, float).copy()
+        Ldirect = np.zeros(np.asarray(Lbol).shape, dtype=float)
     return BolometricLC(
         t_days=np.asarray(t_days, float),
         Lbol=np.asarray(Lbol, float),
         Teff=np.asarray(Teff, float),
         Rph=np.asarray(Rph, float),
+        Lphotospheric=Lphotospheric,
+        Ldirect=Ldirect,
+        photosphere_valid=photosphere_valid,
     )
 
 
@@ -712,10 +828,15 @@ def predict_bol(
     model_vector = _resolve_forward_params(model, params=params, allow_missing_tfloor=True)
     solver = _resolve_solver_kwargs(solver_kwargs, model=model)
     z = ctx.distance.get_z()
-    t_s, Lbol, Teff, Rph = _solve_state(
+    t_s, Lbol, Teff, Rph, transport = _solve_state(
         engine, model_vector, **solver, t_max_days_obs=t_max_days, z=z
     )
-    _validate_solved_state(Lbol, Teff, Rph)
+    _validate_solved_state(
+        Lbol,
+        Teff,
+        Rph,
+        None if transport is None else transport.photosphere_valid,
+    )
     t_grid_days = _t_grid_days_from_ts(t_s, z=z)
 
     # Lbol is strictly positive; log10 interpolation is more stable.
@@ -775,21 +896,33 @@ def lightcurve_multiband(
         z=z,
     )
 
-    engine = _get_engine(model)
-    model_vector = _resolve_forward_params(model, params=params, allow_missing_tfloor=False)
     solver = _resolve_solver_kwargs(solver_kwargs, model=model)
+    engine = _get_engine(model)
+    model_vector = _resolve_forward_params(
+        model,
+        params=params,
+        allow_missing_tfloor=False,
+    )
     DL_cm = ctx.distance.get_DL_cm()
-    t_s, Lbol, Teff, Rph = _solve_state(
+    t_s, Lbol, Teff, Rph, transport = _solve_state(
         engine, model_vector, **solver, t_max_days_obs=t_max_days, z=z
     )
-    _validate_solved_state(Lbol, Teff, Rph)
+    _validate_solved_state(
+        Lbol,
+        Teff,
+        Rph,
+        None if transport is None else transport.photosphere_valid,
+    )
     t_days = _t_grid_days_from_ts(t_s, z=z)
-    y_grid = evaluate_multiband_observer_output(
+    y_grid = _evaluate_multiband_solved_state(
+        model=model,
+        model_vector=model_vector,
+        transport=transport,
+        Teff=Teff,
+        Rph=Rph,
         sed=sed,
         filter_map=filter_map,
         bands=bands,
-        Teff_K=np.asarray(Teff, float),
-        R_cm=np.asarray(Rph, float),
         DL_cm=DL_cm,
         z=z,
         y_kind=ctx.y_kind,
@@ -856,21 +989,33 @@ def predict_multiband(
         z=z,
     )
 
-    engine = _get_engine(model)
-    model_vector = _resolve_forward_params(model, params=params, allow_missing_tfloor=False)
     solver = _resolve_solver_kwargs(solver_kwargs, model=model)
+    engine = _get_engine(model)
+    model_vector = _resolve_forward_params(
+        model,
+        params=params,
+        allow_missing_tfloor=False,
+    )
     DL_cm = ctx.distance.get_DL_cm()
-    t_s, Lbol, Teff, Rph = _solve_state(
+    t_s, Lbol, Teff, Rph, transport = _solve_state(
         engine, model_vector, **solver, t_max_days_obs=t_max_days, z=z
     )
-    _validate_solved_state(Lbol, Teff, Rph)
+    _validate_solved_state(
+        Lbol,
+        Teff,
+        Rph,
+        None if transport is None else transport.photosphere_valid,
+    )
     t_grid_days = _t_grid_days_from_ts(t_s, z=z)
-    y_grid = evaluate_multiband_observer_output(
+    y_grid = _evaluate_multiband_solved_state(
+        model=model,
+        model_vector=model_vector,
+        transport=transport,
+        Teff=Teff,
+        Rph=Rph,
         sed=sed,
         filter_map=filter_map,
         bands=uniq,
-        Teff_K=np.asarray(Teff, float),
-        R_cm=np.asarray(Rph, float),
         DL_cm=DL_cm,
         z=z,
         y_kind=ctx.y_kind,
@@ -899,7 +1044,7 @@ def predict_multiband(
 # -------------------------
 
 _DEFAULT_FIXED_MODEL_PARAMS = {
-    "nickel": {"delta": 0.0, "n": 10.0},
+    "nickel": {"T_floor": 4500.0, "delta": 0.0, "n": 10.0},
     "csm": {"n": 10.0, "delta": 0.0},
     "magnetar": {"f_mag": 0.2},
     "magnetar_ni": {"f_mag": 0.2},
@@ -1970,6 +2115,10 @@ def fit_bol(
         fixed_model,
         model_kwargs_pred,
     )
+    # Bolometric likelihoods do not constrain the blackbody color floor. The
+    # internal forward vector receives _BOL_INTERNAL_T_FLOOR later, but it must
+    # not remain in the reduced bolometric fit state.
+    fixed_model.pop("T_floor", None)
     priors_lin, priors_log10 = _split_prior_specs(priors_model)
     names_all, bounds_all = build_bounds(model, priors=priors_lin, include_t_shift=True)
     bounds_all, log_set_all = _apply_log10_priors(names_all, bounds_all, priors_log10)

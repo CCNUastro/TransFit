@@ -15,35 +15,41 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import transfit as tf
-from transfit.constants import M_SUN, R_SUN
+from transfit.constants import (
+    DAY,
+    EPSILON_CO,
+    EPSILON_NI,
+    M_SUN,
+    R_SUN,
+)
 from transfit.models.nickel import (
-    _BPL_V_MAX_OVER_V_T,
-    _BPL_X_MIN,
-    _EXPONENTIAL_V_MAX_OVER_V_E,
-    _EXPONENTIAL_X_MIN,
-    _broken_power_law_integrals,
-    _density_mass_integral,
-    _exponential_integrals,
+    _PROFILE_Q_MAX,
+    _PROFILE_Q_MIN,
+    _eta_q,
     _finite_profile_scales,
-    _integral_power_law,
+    _radioactive_heating_shape,
+    _q_profile_moment,
 )
 
 
 NX = 100
-NY = 1000
-T_MAX_DAYS = 150.0
+NY = 2000
+T_MAX_DAYS = 300.0
 OUT_DIR = ROOT / "docs/assets/changelog/v0.2"
 
 # Common parameters isolate the density-profile dependence.  In particular,
-# E_Th_in=0 removes the initial shock-cooling component.
+# v_ej is derived from the requested ejecta mass and kinetic energy through
+# E_K=0.5*M_ej*v_ej**2, matching the NickelModel normalization.
+M_EJ_M_SUN = 1.0
+E_K_ERG = 1.0e51
 PARAMS = {
-    "M_ej": 3.0,
-    "v_ej": 1.0,
-    "E_Th_in": 0.0,
-    "M_ni": 0.08,
+    "M_ej": M_EJ_M_SUN,
+    "v_ej": np.sqrt(2.0 * E_K_ERG / (M_EJ_M_SUN * M_SUN)) / 1.0e9,
+    "E_Th_in": 1.0,
+    "M_ni": 0.2,
     "R_0": 1.0,
     "f_ni": 0.8,
-    "kappa": 0.12,
+    "kappa": 0.1,
     "kappa_gamma": 0.03,
     "T_floor": 4500.0,
     "delta": 0.0,
@@ -86,44 +92,28 @@ FIGURE_RC = {
 }
 
 
-def _profile_grid(profile: str) -> tuple[float, float, float, float]:
-    """Return x_min, x_max, dimensionless mass and energy integrals."""
+def _density_profile(profile: str) -> tuple[np.ndarray, np.ndarray]:
+    """Evaluate ``rho/rho_mean`` from the common profile ``eta(q)``."""
     delta = PARAMS["delta"]
     n = PARAMS["n"]
-    if profile == "uniform":
-        x_min, x_max = 1.0, 1.0e4
-        i_mass = _density_mass_integral(x_min, x_max, profile, delta, n)
-        i_kin = _integral_power_law(x_min, x_max, 4.0)
-    elif profile == "broken_power_law":
-        x_min, x_max = _BPL_X_MIN, _BPL_V_MAX_OVER_V_T
-        i_mass, i_kin = _broken_power_law_integrals(
-            x_min, x_max, delta, n
-        )
-    elif profile == "exponential":
-        x_min, x_max = _EXPONENTIAL_X_MIN, _EXPONENTIAL_V_MAX_OVER_V_E
-        i_mass, i_kin = _exponential_integrals(x_min, x_max)
-    else:
-        raise ValueError(f"Unknown profile: {profile}")
-    return float(x_min), float(x_max), float(i_mass), float(i_kin)
-
-
-def _density_profile(profile: str) -> tuple[np.ndarray, np.ndarray]:
-    """Evaluate the initial density on the model's normalized-radius axis."""
-    x_min, x_max, i_mass, i_kin = _profile_grid(profile)
-    q_min = x_min / x_max
-    q = np.linspace(q_min, 1.0, 1000)
-    x = q * x_max
-
-    if profile == "uniform":
-        shape = np.ones_like(x)
-    elif profile == "broken_power_law":
-        shape = np.where(
-            x < 1.0,
-            x ** (-PARAMS["delta"]),
-            x ** (-PARAMS["n"]),
-        )
-    else:
-        shape = np.exp(-x)
+    q = np.linspace(_PROFILE_Q_MIN, _PROFILE_Q_MAX, 1000)
+    shape = _eta_q(q, profile, delta, n)
+    i_mass = _q_profile_moment(
+        _PROFILE_Q_MIN,
+        _PROFILE_Q_MAX,
+        2.0,
+        profile,
+        delta,
+        n,
+    )
+    i_kin = _q_profile_moment(
+        _PROFILE_Q_MIN,
+        _PROFILE_Q_MAX,
+        4.0,
+        profile,
+        delta,
+        n,
+    )
 
     mass = PARAMS["M_ej"] * M_SUN
     radius = PARAMS["R_0"] * R_SUN
@@ -132,7 +122,7 @@ def _density_profile(profile: str) -> tuple[np.ndarray, np.ndarray]:
         mass,
         kinetic_energy,
         radius,
-        x_max,
+        _PROFILE_Q_MAX,
         i_mass,
         i_kin,
     )
@@ -184,6 +174,24 @@ def _solve_lightcurve(profile: str):
     )
 
 
+def _radioactive_deposition(t_days: np.ndarray) -> np.ndarray:
+    """Return the Ni/Co heating deposited by the solver's leakage model."""
+    t_s = np.asarray(t_days, dtype=float) * DAY
+    t_gamma = np.sqrt(
+        3.0
+        * PARAMS["kappa_gamma"]
+        * PARAMS["M_ej"]
+        * M_SUN
+        / (4.0 * np.pi * (PARAMS["v_ej"] * 1.0e9) ** 2)
+    )
+
+    specific_heating = (
+        (EPSILON_NI - EPSILON_CO)
+        * _radioactive_heating_shape(t_s, t_gamma)
+    )
+    return PARAMS["M_ni"] * M_SUN * specific_heating
+
+
 def plot_lightcurve_effect() -> Path:
     output = OUT_DIR / "nickel-density-profile-lightcurves.png"
     solutions = {
@@ -201,10 +209,21 @@ def plot_lightcurve_effect() -> Path:
         )
         ax.plot(lc.t_days, lc.Lbol, **style)
 
+    heating_time = np.linspace(0.0, T_MAX_DAYS, NY + 1)
+    ax.plot(
+        heating_time,
+        _radioactive_deposition(heating_time),
+        color="0.15",
+        linestyle=":",
+        linewidth=2.0,
+        label=r"Deposited $^{56}$Ni+$^{56}$Co heating",
+        zorder=2,
+    )
+
     ax.set(
         yscale="log",
         xlim=(0.0, T_MAX_DAYS),
-        ylim=(5.0e39, 2.0e42),
+        ylim=(2.0e38, 7.0e42),
         xlabel="Rest-frame time since explosion (d)",
         ylabel=r"Bolometric luminosity (erg s$^{-1}$)",
         title=rf"Density-profile effect on the nickel light curve ($N_x={NX}$, $N_y={NY}$)",

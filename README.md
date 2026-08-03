@@ -24,7 +24,7 @@ interaction models.
 ## Features
 
 - Physical light-curve models with bolometric luminosity, effective
-  temperature, and photospheric radius outputs.
+  temperature, and photospheric-radius outputs.
 - Multi-band photometry in flux or magnitude space, including filter,
   extinction, and SED handling.
 - Bayesian fitting through a consistent result object, with `emcee` installed
@@ -68,7 +68,6 @@ params = {
     "f_ni": 0.2,
     "kappa": 0.12,
     "kappa_gamma": 0.03,
-    "T_floor": 4500.0,
 }
 
 lc = tf.lightcurve_bol(
@@ -84,6 +83,13 @@ plt.xlabel("Observer-frame time (days)")
 plt.ylabel("Bolometric luminosity (erg s$^{-1}$)")
 plt.show()
 ```
+
+For nickel, the diffusion grid ends at the physical `tau=2/3` photosphere.
+`lc.Lphotospheric` is the luminosity released there, `lc.Ldirect` is deposited
+power outside it, and `lc.Lbol = lc.Lphotospheric + lc.Ldirect`. The returned
+`Rph` and `Teff` are the true grey photospheric quantities without a temperature
+floor. They become `NaN` after the ejecta is fully optically thin, while `Lbol`
+remains finite and follows deposited heating.
 
 <p align="center">
   <img src="docs/lightcurve_bol.png" alt="Bolometric forward model example">
@@ -107,7 +113,6 @@ params = {
     "f_ni": 0.2,
     "kappa": 0.12,
     "kappa_gamma": 0.03,
-    "T_floor": 4500.0,
 }
 
 filters = {
@@ -136,6 +141,14 @@ plt.ylabel("Vega magnitude")
 plt.legend()
 plt.show()
 ```
+
+Nickel multi-band curves use the same physical-photosphere bolometric
+transport, then map the complete `Lbol` to the homologous radius
+`R_hom=R_0+v_max*t`. If the resulting blackbody temperature falls below
+`T_floor`, the temperature is fixed and an effective radius is inferred so the
+blackbody still integrates to `Lbol`. This is a continuum prescription, not a
+nebular-line model. Built-in filters currently evaluate one effective
+frequency; full throughput integration is not yet implemented.
 
 `filters` maps the band labels in your data to filter definitions. Built-in
 filters use string IDs. Custom mono filters should use an effective wavelength:
@@ -270,7 +283,6 @@ res = tf.fit_multiband(
         "f_ni": 0.2,
         "kappa": 0.12,
         "kappa_gamma": 0.03,
-        "T_floor": 4500.0,
     },
     sampler_kwargs={"nwalkers": 32, "nsteps": 5000, "burnin": 1000, "thin": 10},
 )
