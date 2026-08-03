@@ -34,7 +34,7 @@ from transfit.models.nickel import (
 
 NX = 100
 NY = 2000
-T_MAX_DAYS = 300.0
+T_MAX_DAYS = 100.0
 OUT_DIR = ROOT / "docs/assets/changelog/v0.2"
 
 # Common parameters isolate the density-profile dependence.  In particular,
@@ -47,7 +47,7 @@ PARAMS = {
     "v_ej": np.sqrt(2.0 * E_K_ERG / (M_EJ_M_SUN * M_SUN)) / 1.0e9,
     "E_Th_in": 1.0,
     "M_ni": 0.2,
-    "R_0": 1.0,
+    "R_0": 100.0,
     "f_ni": 0.8,
     "kappa": 0.1,
     "kappa_gamma": 0.03,
@@ -223,10 +223,39 @@ def plot_lightcurve_effect() -> Path:
     ax.set(
         yscale="log",
         xlim=(0.0, T_MAX_DAYS),
-        ylim=(2.0e38, 7.0e42),
+        ylim=(3.0e40, 3.0e43),
         xlabel="Rest-frame time since explosion (d)",
         ylabel=r"Bolometric luminosity (erg s$^{-1}$)",
-        title=rf"Density-profile effect on the nickel light curve ($N_x={NX}$, $N_y={NY}$)",
+        title="Density-profile effect on the nickel light curve",
+    )
+    parameter_text = (
+        rf"$M_{{\rm ej}}={PARAMS['M_ej']:g}\,M_\odot$, "
+        rf"$R_0={PARAMS['R_0']:g}\,R_\odot$"
+        "\n"
+        rf"$E_K={E_K_ERG / 1.0e51:g}\times10^{{51}}\,\rm erg$, "
+        rf"$E_{{\rm Th,in}}={PARAMS['E_Th_in']:g}\times10^{{49}}\,\rm erg$"
+        "\n"
+        rf"$M_{{\rm Ni}}={PARAMS['M_ni']:g}\,M_\odot$, "
+        rf"$f_{{\rm Ni}}={PARAMS['f_ni']:g}$"
+        "\n"
+        rf"$\kappa={PARAMS['kappa']:g}\,\rm cm^2\,g^{{-1}}$, "
+        rf"$\kappa_\gamma={PARAMS['kappa_gamma']:g}\,\rm cm^2\,g^{{-1}}$"
+    )
+    ax.text(
+        0.98,
+        0.055,
+        parameter_text,
+        transform=ax.transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=8,
+        linespacing=1.35,
+        bbox={
+            "boxstyle": "round,pad=0.35",
+            "facecolor": "white",
+            "edgecolor": "0.75",
+            "alpha": 0.9,
+        },
     )
     ax.legend(loc="upper right", frameon=False)
 
