@@ -65,20 +65,30 @@ r=v t_{\rm h},\qquad
 R_{\rm out}=v_{\max}t_{\rm h}=R_0+v_{\max}t .
 ```
 
-模型采用的三种物理密度结构为
+模型采用以下三种物理密度结构。Uniform 为
 
 ```math
-\rho(v,t)=
-\begin{cases}
-\rho_{\rm u}(t),
-& \mathrm{Uniform},\\
-\rho_t(t)(v/v_t)^{-\delta},
-& \mathrm{BPL},\quad 0\le v<v_t,\\
-\rho_t(t)(v/v_t)^{-n},
-& \mathrm{BPL},\quad v_t\le v\le v_{\max},\\
-\rho_e(t)\exp(-v/v_e),
-& \mathrm{Ia/exponential},\quad 0\le v\le v_{\max}.
-\end{cases}
+\rho_{\rm Uniform}(v,t)=\rho_{\rm u}(t),
+\qquad 0\le v\le v_{\max}.
+```
+
+BPL 的内区和外区分别为
+
+```math
+\rho_{\rm BPL}(v,t)=\rho_t(t)(v/v_t)^{-\delta},
+\qquad 0\le v<v_t,
+```
+
+```math
+\rho_{\rm BPL}(v,t)=\rho_t(t)(v/v_t)^{-n},
+\qquad v_t\le v\le v_{\max}.
+```
+
+Ia/exponential 为
+
+```math
+\rho_{\rm Ia}(v,t)=\rho_e(t)\exp(-v/v_e),
+\qquad 0\le v\le v_{\max}.
 ```
 
 BPL 在 $v_{\max}=3v_t$ 处截断，Ia/exponential 在
@@ -154,16 +164,23 @@ T_{\rm try}=\left(\frac{L_{\rm bol}}
 {4\pi\sigma R_{\rm try}^2}\right)^{1/4} .
 ```
 
-最终黑体量和频谱为
+对于物理光球有效且 $T_{\rm try}>T_{\rm floor}$ 的高温节点，取
 
 ```math
-(T_{\rm BB},R_{\rm BB})=\begin{cases}
-(T_{\rm try},R_*), &
-\text{有效高温节点且 }T_{\rm try}>T_{\rm floor},\\
-\left(T_{\rm floor},\sqrt{L_{\rm bol}/(4\pi\sigma T_{\rm floor}^4)}\right),
-& \text{其他时刻},
-\end{cases}
-\qquad
+T_{\rm BB}=T_{\rm try},\qquad R_{\rm BB}=R_*.
+```
+
+其他时刻取
+
+```math
+T_{\rm BB}=T_{\rm floor},\qquad
+R_{\rm BB}=\sqrt{\frac{L_{\rm bol}}
+{4\pi\sigma T_{\rm floor}^4}}.
+```
+
+相应黑体频谱为
+
+```math
 L_\nu=4\pi^2R_{\rm BB}^2B_\nu(T_{\rm BB}) .
 ```
 
