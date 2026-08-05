@@ -36,53 +36,16 @@ R_{\mathrm{ph}}(t)=a(t)R_{\mathrm{CSM,out}}
   平滑、稳定。
 - Nickel 模型支持 `uniform`、`bpl`/`broken_power_law` 和
   `exponential`/`ia` 三种密度轮廓。
+- Nickel 根据归一化后的密度名称自动选择辐射策略：Uniform 保留历史外边界
+  求解和同模膨胀黑体，BPL/Ia 使用移动 $\tau=2/3$ 光球及光球外直接逃逸。
+- BPL/Ia 多波段把 `Ldirect` 转换为 $T_{\rm floor}$ 下的等效发射面积，再由
+  完整 `Lbol` 归一化黑体，避免把光球外光度压缩到后退的物理光球上。
 - `R_0` 表示抛射物有限的初始外半径。
 - `f_ni` 表示 Nickel 混合到的拉格朗日质量坐标；当
   `M_ni > f_ni*M_ej` 时，模型会拒绝该组非物理参数。
 - BPL 拟合默认固定 `delta=0`、`n=10`。只有显式放入 `priors` 的参数才参与
   拟合。
 - Exponential/Ia 拟合默认固定 `R_0=0.01 R_sun`。
-
-### API
-
-正向计算直接选择密度轮廓：
-
-```python
-lc = tf.lightcurve_bol(
-    model="nickel",
-    params=params,
-    solver_kwargs={
-        "Nx": 100,
-        "Ny": 1000,
-        "density_profile": "bpl",
-    },
-)
-```
-
-拟合时把相同设置放在 `model_kwargs` 中：
-
-```python
-result = tf.fit_bol(
-    data=data,
-    model="nickel",
-    model_kwargs={
-        "solver_kwargs": {
-            "Nx": 100,
-            "Ny": 1000,
-            "density_profile": "bpl",
-        }
-    },
-)
-```
-
-需要拟合 BPL 指数时再显式提供先验：
-
-```python
-priors = {
-    "delta": (0.0, 2.0),
-    "n": (6.0, 12.0),
-}
-```
 
 ### 密度轮廓
 
@@ -94,56 +57,81 @@ priors = {
 
 ### Nickel 密度与光球计算
 
-三种密度结构统一写为
+抛射物作同模膨胀。定义
 
 ```math
-\rho(q,t)=\rho_0\,\eta(q)f_R^{-3},\qquad
-q=\frac{r}{R_{\rm out}}=\frac{v}{v_{\max}},\qquad
-R_{\rm out}=R_0+v_{\max}t,\qquad
-f_R=\frac{R_{\rm out}}{R_0} .
+t_{\rm h}=t+\frac{R_0}{v_{\max}},\qquad
+r=v t_{\rm h},\qquad
+R_{\rm out}=v_{\max}t_{\rm h}=R_0+v_{\max}t .
 ```
 
-其中
+模型采用的三种物理密度结构为
 
 ```math
-\eta(q)=
+\rho(v,t)=
 \begin{cases}
-1, & \mathrm{Uniform},\\
-(q/q_t)^{-\delta}, & \mathrm{BPL},\ q<q_t,\\
-(q/q_t)^{-n}, & \mathrm{BPL},\ q\ge q_t,\\
-\exp(-q/q_e), & \mathrm{Ia/exponential},
+\rho_{\rm u}(t),
+& \mathrm{Uniform},\\
+\rho_t(t)(v/v_t)^{-\delta},
+& \mathrm{BPL},\quad 0\le v<v_t,\\
+\rho_t(t)(v/v_t)^{-n},
+& \mathrm{BPL},\quad v_t\le v\le v_{\max},\\
+\rho_e(t)\exp(-v/v_e),
+& \mathrm{Ia/exponential},\quad 0\le v\le v_{\max}.
 \end{cases}
-\qquad q_t=\frac{1}{3},\quad q_e=\frac{1}{12}.
 ```
 
-向外光深为
+BPL 在 $v_{\max}=3v_t$ 处截断，Ia/exponential 在
+$v_{\max}=12v_e$ 处截断。$\rho_{\rm u}(t)$、$\rho_t(t)$、$\rho_e(t)$
+均随同模膨胀按 $t_{\rm h}^{-3}$ 下降。密度归一化和 $v_{\max}$ 由抛射物
+质量与动能共同确定：
 
 ```math
-\tau(q,t)=\frac{\kappa\rho_0R_0}{f_R^2}
-\int_q^1\eta(q')\,dq' .
+M_{\rm ej}=4\pi t_{\rm h}^{3}
+\int_0^{v_{\max}}\rho(v,t)v^2\,dv,
+\qquad
+E_K=2\pi t_{\rm h}^{3}
+\int_0^{v_{\max}}\rho(v,t)v^4\,dv
+=\frac{1}{2}M_{\rm ej}v_{\rm ej}^2 .
 ```
 
-物理光球由
+因此输入的 $v_{\rm ej}$ 是由总动能定义的特征速度，而不是所有密度结构
+共用的固定外边界速度。由物理密度直接积分得到向外光深：
 
 ```math
-\tau(q_{\rm ph},t)=\frac{2}{3}
+\tau(v,t)=\int_{r(v,t)}^{R_{\rm out}(t)}\kappa\rho(r',t)\,dr'
+=\kappa t_{\rm h}\int_v^{v_{\max}}\rho(v',t)\,dv' .
+```
+
+不同密度结构自动选择不同的辐射边界。Uniform 保留原始外边界扩散光度：
+
+```math
+L_{\rm bol}=L_{\rm out},\qquad L_{\rm direct}=0.
+```
+
+该历史路径保留原始 gamma 处理：Ni 项完全俘获，只对 Co 项施加 leakage。
+
+BPL 和 Ia/exponential 的物理光球由
+
+```math
+\tau(v_{\rm ph},t)=\frac{2}{3}
 ```
 
 确定。光球内沉积参与扩散，光球外沉积直接逃逸，因此
 
 ```math
 L_{\rm bol}=L_{\rm photospheric}+L_{\rm direct},\qquad
-R_{\rm ph}=R_{\rm out}q_{\rm ph},\qquad
+R_{\rm ph}=v_{\rm ph}t_{\rm h},\qquad
 T_{\rm ph}=\left(\frac{L_{\rm photospheric}}
 {4\pi\sigma R_{\rm ph}^2}\right)^{1/4} .
 ```
 
-总光深低于 $2/3$ 后，`photosphere_valid=False`、
+对于 BPL 和 Ia/exponential，总光深低于 $2/3$ 后，`photosphere_valid=False`、
 `Lphotospheric=0`、`Lbol=Ldirect`，并令物理 `Rph/Teff=NaN`。
 
 ### Nickel 多波段
 
-有效温度的处理与原 Uniform 密度模型相同，使用同模膨胀黑体：
+Uniform 保留原始同模膨胀黑体：
 
 ```math
 R_{\rm hom}=R_0+v_{\max}t,\qquad
@@ -151,23 +139,43 @@ T_{\rm try}=\left(\frac{L_{\rm bol}}
 {4\pi\sigma R_{\rm hom}^2}\right)^{1/4} .
 ```
 
+BPL 和 Ia/exponential 先把 `Ldirect` 换算成地板温度等效半径：
+
+```math
+R_{\rm direct}=\left(\frac{L_{\rm direct}}
+{4\pi\sigma T_{\rm floor}^4}\right)^{1/2},\qquad
+R_{\rm try}=\left(R_{\rm ph}^2+R_{\rm direct}^2\right)^{1/2},
+```
+
+再由完整 `Lbol` 确定温度：
+
+```math
+T_{\rm try}=\left(\frac{L_{\rm bol}}
+{4\pi\sigma R_{\rm try}^2}\right)^{1/4} .
+```
+
 最终黑体量和频谱为
 
 ```math
-(T_{\rm BB},R_{\rm BB})=
-\begin{cases}
-(T_{\rm try},R_{\rm hom}), & T_{\rm try}>T_{\rm floor},\\
+(T_{\rm BB},R_{\rm BB})=\begin{cases}
+(T_{\rm try},R_*), &
+\text{有效高温节点且 }T_{\rm try}>T_{\rm floor},\\
 \left(T_{\rm floor},\sqrt{L_{\rm bol}/(4\pi\sigma T_{\rm floor}^4)}\right),
-& T_{\rm try}\le T_{\rm floor},
+& \text{其他时刻},
 \end{cases}
 \qquad
 L_\nu=4\pi^2R_{\rm BB}^2B_\nu(T_{\rm BB}) .
 ```
 
-### 调用方式
+其中 Uniform 取 $R_*=R_{\rm hom}$，BPL 和 Ia/exponential 取
+$R_*=R_{\rm try}$。完全光学薄后自然有 $R_{\rm try}=R_{\rm direct}$；判断逐
+时刻进行，低温阶段由完整 `Lbol` 反算地板半径，不提供额外星云 SED 分量。
+
+### API 调用
 
 ```python
 # 可选："uniform"、"bpl" / "broken_power_law"、"ia" / "exponential"
+# 默认 uniform 使用历史外边界；bpl/ia 使用当前 tau=2/3 光球
 solver = {"Nx": 100, "Ny": 1000, "density_profile": "bpl"}
 
 bol = tf.lightcurve_bol(
@@ -199,3 +207,6 @@ multiband_fit = tf.fit_multiband(
 
 `fit_bol` 不包含 `T_floor`；`fit_multiband` 默认固定 `T_floor=4500 K`，只有
 显式放入 `priors` 时才采样。
+
+输入别名会在求解前统一转换：`bpl` 等价于 `broken_power_law`，`exp` 和
+`ia` 等价于 `exponential`；别名与完整名称给出完全相同的结果。

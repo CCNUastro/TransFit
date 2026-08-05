@@ -35,7 +35,7 @@ rest-frame time 中求解，并在 API 边界转换回 observer frame。
 | `f_ni` | Ni 混合区外边界的拉格朗日质量坐标，M(<x_Ni)/M_ej |
 | `kappa` | optical opacity，cm^2 g^-1 |
 | `kappa_gamma` | gamma-ray opacity，cm^2 g^-1 |
-| `T_floor` | Nickel 同模膨胀多波段黑体的温度地板；默认 4500 K |
+| `T_floor` | Nickel 物理光球多波段黑体的温度地板；默认 4500 K |
 | `delta` | BPL 内层密度指数，无量纲 |
 | `n` | BPL 外层密度指数，无量纲 |
 
@@ -160,12 +160,13 @@ tf.lightcurve_bol(
 - `Lbol`
 - `Teff`
 - `Rph`
-- `Lphotospheric`：真实光球释放的光度
-- `Ldirect`：光球外沉积的功率
-- `photosphere_valid`：物理 `Teff/Rph` 的有效掩码
+- `Lphotospheric`：Uniform 外边界光度或 BPL/Ia 光球光度
+- `Ldirect`：Uniform 为零；BPL/Ia 为光球外沉积功率
+- `photosphere_valid`：Uniform 等效黑体始终为真；BPL/Ia 为物理光球掩码
 
-Nickel 满足 `Lbol=Lphotospheric+Ldirect`。整个抛射物光学薄后，
-`Lphotospheric=0`、`photosphere_valid=False`，并且 `Teff/Rph` 为 `NaN`。
+Uniform 返回 `Lphotospheric=Lbol`、`Ldirect=0` 和历史等效黑体 `Teff/Rph`。
+BPL 与 Ia/exponential 满足 `Lbol=Lphotospheric+Ldirect`；完全光学薄后返回
+`Lphotospheric=0`、`photosphere_valid=False` 和物理 `Teff/Rph=NaN`。
 
 多波段正向计算：
 
@@ -192,7 +193,7 @@ tf.lightcurve_multiband(
 - `bands`
 - `y[band]`
 
-Nickel 只保留一套生产多波段映射。它使用完整的物理输运光度和同模膨胀外半径：
+Uniform 使用历史同模膨胀半径：
 
 \[
 R_{\rm hom}=R_0+v_{\max}t,\qquad
@@ -200,14 +201,30 @@ T_{\rm try}=\left(\frac{L_{\rm bol}}
 {4\pi\sigma R_{\rm hom}^2}\right)^{1/4}.
 \]
 
-当 `T_try > T_floor` 时使用 `(R_hom, T_try)`；否则固定 `T=T_floor`，并反算
+BPL 与 Ia/exponential 把 `Ldirect` 换算成地板温度半径，并把它的面积与物理
+光球面积相加：
 
 \[
-R_{\rm eff}=\left(\frac{L_{\rm bol}}
+R_{\rm direct}=\left(\frac{L_{\rm direct}}
+{4\pi\sigma T_{\rm floor}^4}\right)^{1/2},\qquad
+R_{\rm try}=\left(R_{\rm ph}^2+R_{\rm direct}^2\right)^{1/2},
+\]
+
+\[
+T_{\rm try}=\left(\frac{L_{\rm bol}}
+{4\pi\sigma R_{\rm try}^2}\right)^{1/4}.
+\]
+
+Uniform 的高温分支使用 `(Rhom,T_try)`；BPL/Ia 使用 `(R_try,T_try)`。
+其余情况使用
+
+\[
+T_{\rm BB}=T_{\rm floor},\qquad
+R_{\rm BB}=\left(\frac{L_{\rm bol}}
 {4\pi\sigma T_{\rm floor}^4}\right)^{1/2}.
 \]
 
-因此物理光球消失后多波段连续谱仍保持有限，同时不再引入单独的星云温度或
+完全光学薄后自然有 `R_try=R_direct`，映射保持在地板温度；不引入单独的星云
 SED 模式。
 
 AB 输出再使用
@@ -375,9 +392,8 @@ res = tf.fit_multiband(
 
 `Nx` 和 `Ny` 都必须是正整数。
 
-Nickel 输运的 `Ny` 个输出/积分节点采用固定、嵌套的二次网格
-`t_i=t_max*(i/Ny)^2`。它在最初几天自动加密，同时仍只用 `Ny` 控制公开的
-时间分辨率；把 `Ny` 加倍时会完整保留粗网格的全部节点。
+Uniform 保留历史线性节点 `t_i=t_max*i/Ny`；BPL 与 Ia/exponential 使用
+嵌套二次网格 `t_i=t_max*(i/Ny)^2`。
 
 对于 `nickel` 模型，`solver_kwargs` 还支持：
 
@@ -385,7 +401,9 @@ Nickel 输运的 `Ny` 个输出/积分节点采用固定、嵌套的二次网格
 |---|---|---|
 | `density_profile` | `"uniform"` | 密度结构：`"uniform"`、`"bpl"`/`"broken_power_law"` 或 `"exp"`/`"exponential"`/`"ia"`。 |
 
-Nickel 唯一的生产输运边界满足
+Uniform 使用历史固定外扩散边界，以外边界通量作为 `Lbol`，并令
+`Ldirect=0`；Ni 项完全俘获，仅 Co 项施加 gamma leakage。BPL 与
+Ia/exponential 的输运边界满足
 
 ```text
 tau(q_ph -> 1) = 2/3。
@@ -405,8 +423,8 @@ T_{\rm ph}=\left(\frac{L_{\rm photospheric}}
 {4\pi\sigma R_{\rm ph}^2}\right)^{1/4}。
 \]
 
-这个物理量不加温度地板。原来的 Nickel 外边界、FLD 和后期模式别名不再是
-公开 solver 选项。
+这个 BPL/Ia 物理量不加温度地板。Uniform 外边界通过
+`density_profile="uniform"` 选择；FLD 和后期模式别名不再是公开选项。
 
 对于 `csm` 模型，`solver_kwargs` 还支持：
 
@@ -493,9 +511,10 @@ model_kwargs={
 
 BPL 使用拟合中的 `M_ej` 和 `v_ej` 归一化：在转折点 `x=1` 内侧
 `rho/rho_t = x**(-delta)`，外侧为 `x**(-n)`。
-三种轮廓统一在 `10^-4 <= q=v/v_max=r/R_out <= 1` 上计算。BPL 的
-`q_t=v_t/v_max=1/3` 和指数轮廓的 `q_e=v_e/v_max=1/12` 全部写进
-`eta(q)`。移动光球计算中三种轮廓都采用 backward Euler。
+历史 Uniform 求解器使用 `1 <= x <= 10^4`，等价于
+`10^-4 <= q=x/10^4 <= 1`，并采用 Crank--Nicolson。BPL 和指数轮廓使用公共
+`q` 坐标及 backward Euler；`q_t=v_t/v_max=1/3` 和
+`q_e=v_e/v_max=1/12` 写入 `eta(q)`。
 
 三种轮廓都在初始外半径 `R_0` 截止。密度尺度和速度尺度由有限区间内的质量、
 动能积分共同确定，因此计算区域内严格恢复输入的 `M_ej` 和

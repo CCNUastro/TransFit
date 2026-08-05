@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import pickle
+from types import SimpleNamespace
 import warnings
 import numpy as np
 import pytest
@@ -9,7 +10,8 @@ import pytest
 import transfit as tf
 import transfit.api as api
 from transfit.api import _physical_constraints_lnprior
-from transfit.constants import C_LIGHT, MPC
+from transfit.constants import C_LIGHT, M_SUN, MPC, PC, PI, SIGMA_SB
+from transfit.models.nickel import NickelModel
 from transfit.modules.extinction import (
     apply_extinction_to_fnu_grid,
     extinction_from_dict,
@@ -1707,7 +1709,7 @@ def test_explicit_distance_and_extinction_roundtrip(tmp_path):
     assert loaded["ctx"]["extinction"]["band_map"]["values_mag"]["B"] == pytest.approx(0.1)
 
 
-def test_nickel_homologous_temperature_floor_defaults_and_can_be_sampled():
+def test_nickel_photospheric_temperature_floor_defaults_and_can_be_sampled():
     model_kwargs, _ = api._split_fit_model_kwargs({}, model="nickel")
     fixed = api._apply_default_fixed_model_params(
         "nickel",
@@ -1726,7 +1728,7 @@ def test_nickel_homologous_temperature_floor_defaults_and_can_be_sampled():
     assert "T_floor" not in sampled
 
 
-def test_nickel_multiband_uses_default_homologous_temperature_floor():
+def test_nickel_multiband_uses_default_temperature_floor():
     params_default = dict(PARAMS_NI)
     params_default.pop("T_floor")
     params_explicit = dict(params_default, T_floor=4500.0)
@@ -1753,6 +1755,46 @@ def test_nickel_multiband_uses_default_homologous_temperature_floor():
     np.testing.assert_allclose(curves[0].y["r"], curves[1].y["r"], rtol=0.0, atol=0.0)
 
 
+def test_uniform_multiband_uses_historical_homologous_blackbody():
+    params = dict(PARAMS_NI, T_floor=4500.0, delta=0.0, n=10.0)
+    solver = {"Nx": 30, "Ny": 80, "density_profile": "uniform"}
+    model_vector = tuple(params[name] for name in tf.model_param_names("nickel"))
+    state = NickelModel().calculate_transport(
+        model_vector,
+        Nx=solver["Nx"],
+        Ny=solver["Ny"],
+        t_max_days=20.0,
+        density_profile="uniform",
+    )
+    curve = tf.lightcurve_multiband(
+        model="nickel",
+        params=params,
+        z=0.0,
+        distance_modulus=0.0,
+        filters={"r": "sdss.r"},
+        bands=["r"],
+        y_kind="flux",
+        mag_system="ab",
+        t_max_days=20.0,
+        solver_kwargs=solver,
+    )
+    expected = evaluate_multiband_observer_output(
+        sed=BlackbodySED(),
+        filter_map=normalize_filters({"r": "sdss.r"}),
+        bands=["r"],
+        Teff_K=state.Tph,
+        R_cm=state.Rph,
+        DL_cm=10.0 * PC,
+        z=0.0,
+        y_kind="flux",
+        mag_system="ab",
+        extinction=normalize_extinction(None),
+    )
+
+    np.testing.assert_allclose(curve.t_days, state.t_s / 86400.0, rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(curve.y["r"], expected[0], rtol=0.0, atol=0.0)
+
+
 def test_nickel_multiband_uses_the_bolometric_transport_grid():
     bolometric = tf.lightcurve_bol(
         model="nickel",
@@ -1776,9 +1818,144 @@ def test_nickel_multiband_uses_the_bolometric_transport_grid():
     np.testing.assert_allclose(curve.t_days, bolometric.t_days, rtol=0.0, atol=0.0)
 
 
-def test_fully_thin_homologous_floor_has_constant_band_flux_per_lbol():
+def test_nickel_photospheric_blackbody_is_reversible_and_uses_floor_when_thin():
+    floor = 4500.0
+    physical_radius = np.array([1.0e14, 2.0e14, 1.5e14, 1.2e14, np.nan])
+    trial_temperature = np.array([8000.0, 3000.0, 7000.0, 9000.0, np.nan])
+    luminosity = np.array([
+        4.0 * PI * SIGMA_SB * physical_radius[0] ** 2 * trial_temperature[0] ** 4,
+        4.0 * PI * SIGMA_SB * physical_radius[1] ** 2 * trial_temperature[1] ** 4,
+        4.0 * PI * SIGMA_SB * physical_radius[2] ** 2 * trial_temperature[2] ** 4,
+        4.0 * PI * SIGMA_SB * physical_radius[3] ** 2 * trial_temperature[3] ** 4,
+        1.0e41,
+    ])
+    transport = SimpleNamespace(
+        Lbol=luminosity,
+        Ldirect=np.array([0.0, 0.0, 0.0, 0.0, luminosity[-1]]),
+        Rph=physical_radius,
+        photosphere_valid=np.array([True, True, True, True, False]),
+    )
+
+    temperature, radius = api._nickel_photospheric_blackbody(transport, floor)
+    expected_floor_radius = np.sqrt(
+        luminosity / (4.0 * PI * SIGMA_SB * floor**4)
+    )
+
+    np.testing.assert_allclose(
+        temperature,
+        [8000.0, floor, 7000.0, 9000.0, floor],
+    )
+    np.testing.assert_allclose(
+        radius,
+        [
+            physical_radius[0],
+            expected_floor_radius[1],
+            physical_radius[2],
+            physical_radius[3],
+            expected_floor_radius[4],
+        ],
+    )
+    np.testing.assert_allclose(
+        4.0 * PI * SIGMA_SB * radius**2 * temperature**4,
+        luminosity,
+        rtol=2.0e-15,
+        atol=0.0,
+    )
+
+    direct_dominated = SimpleNamespace(
+        Lbol=np.array([1.0e43]),
+        Ldirect=np.array([1.0e43]),
+        Rph=np.array([1.0e16]),
+        photosphere_valid=np.array([True]),
+    )
+    direct_temperature, direct_radius = api._nickel_photospheric_blackbody(
+        direct_dominated,
+        floor,
+    )
+    np.testing.assert_allclose(direct_temperature, [floor])
+    np.testing.assert_allclose(
+        direct_radius,
+        np.sqrt(direct_dominated.Lbol / (4.0 * PI * SIGMA_SB * floor**4)),
+    )
+
+
+def test_nickel_photospheric_floor_allows_delayed_radioactive_reheating():
+    floor = 4500.0
+    ejecta_mass = 3.0
+    velocity = np.sqrt(2.0e51 / (ejecta_mass * M_SUN)) / 1.0e9
+    state = NickelModel().calculate_transport(
+        (
+            ejecta_mass,
+            velocity,
+            0.1,
+            0.05,
+            100.0,
+            0.8,
+            0.1,
+            0.03,
+            floor,
+            0.0,
+            10.0,
+        ),
+        Nx=50,
+        Ny=600,
+        t_max_days=35.0,
+        density_profile="broken_power_law",
+    )
+    temperature, _ = api._nickel_photospheric_blackbody(state, floor)
+    time_days = state.t_s / 86400.0
+
+    def temperature_near(day):
+        return float(temperature[np.argmin(np.abs(time_days - day))])
+
+    assert temperature_near(1.0) > floor
+    assert temperature_near(3.0) == pytest.approx(floor)
+    assert temperature_near(10.0) > floor
+    assert temperature_near(30.0) == pytest.approx(floor)
+
+
+def test_direct_equivalent_area_prevents_bpl_terminal_temperature_spike():
+    floor = 4500.0
+    ejecta_mass = 1.0
+    velocity = np.sqrt(2.0e51 / (ejecta_mass * M_SUN)) / 1.0e9
+    state = NickelModel().calculate_transport(
+        (
+            ejecta_mass,
+            velocity,
+            1.0,
+            0.2,
+            100.0,
+            0.8,
+            0.1,
+            0.03,
+            floor,
+            0.0,
+            10.0,
+        ),
+        Nx=100,
+        Ny=1000,
+        t_max_days=100.0,
+        density_profile="broken_power_law",
+    )
+    temperature, radius = api._nickel_photospheric_blackbody(state, floor)
+    valid = state.photosphere_valid
+    last_valid = int(np.flatnonzero(valid)[-1])
+    first_floor = int(np.flatnonzero(temperature == floor)[0])
+
+    assert state.Ldirect[last_valid] / state.Lbol[last_valid] > 0.99999
+    assert temperature[last_valid] == pytest.approx(floor)
+    assert np.all(temperature[first_floor:] == floor)
+    np.testing.assert_allclose(
+        4.0 * PI * SIGMA_SB * radius**2 * temperature**4,
+        state.Lbol,
+        rtol=2.0e-15,
+        atol=0.0,
+    )
+
+
+def test_fully_thin_bpl_floor_has_constant_band_flux_per_lbol():
     params = dict(PARAMS_NI, M_ej=1.0, R_0=1.0, f_ni=0.8, kappa=0.1)
-    solver = {"Nx": 60, "Ny": 600, "density_profile": "uniform"}
+    solver = {"Nx": 60, "Ny": 600, "density_profile": "bpl"}
     bolometric = tf.lightcurve_bol(
         model="nickel",
         params=params,

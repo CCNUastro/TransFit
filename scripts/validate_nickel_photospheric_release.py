@@ -1,4 +1,4 @@
-"""Scientific release gate for physical transport plus homologous SED."""
+"""Scientific release gate for profile-selected Nickel transport and SED."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import transfit as tf
+from transfit.api import _nickel_photospheric_blackbody
 from transfit.constants import (
     DAY,
     EPSILON_CO,
@@ -49,21 +50,31 @@ PARAMS = {
     "n": 10.0,
 }
 THETA = tuple(PARAMS[name] for name in tf.model_param_names("nickel"))
-PROFILES = ("uniform", "broken_power_law", "exponential")
+PHOTOSPHERIC_PROFILES = ("broken_power_law", "exponential")
 NX = 100
 NY = 1000
 T_MAX_DAYS = 300.0
-METRICS_PATH = ROOT / "result/tables/nickel-photosphere-homologous-release-metrics.json"
+METRICS_PATH = ROOT / "result/tables/nickel-photosphere-floor-release-metrics.json"
 
 THRESHOLDS = {
     "component_closure": 1.0e-13,
     "stefan_boltzmann": 1.0e-12,
     "photosphere_tau": 1.0e-5,
+    "multiband_stefan_boltzmann": 1.0e-12,
+    "multiband_combined_radius": 1.0e-12,
     "thin_heating": 1.0e-11,
     "spatial_convergence_after_5d": 5.0e-3,
     "temporal_convergence_after_10d": 5.0e-3,
     "temporal_peak_normalized_at_1p5d": 5.0e-4,
-    "homologous_floor_flux_ratio": 1.0e-11,
+    "thin_floor_flux_ratio": 1.0e-11,
+}
+UNIFORM_THRESHOLDS = {
+    "component_closure": 1.0e-15,
+    "stefan_boltzmann": 1.0e-12,
+    "linear_time_grid": 1.0e-14,
+    "historical_lbol_regression": 3.0e-15,
+    "historical_temperature_regression": 3.0e-15,
+    "historical_radius_regression": 3.0e-15,
 }
 
 
@@ -123,7 +134,95 @@ def _max_relative(candidate, reference, mask=None) -> float:
     return float(np.max(relative)) if relative.size else 0.0
 
 
+def _uniform_transport_metrics() -> dict:
+    """Validate the restored historical Uniform transport and blackbody."""
+    model = NickelModel()
+    state = model.calculate_transport(
+        THETA,
+        Nx=NX,
+        Ny=NY,
+        t_max_days=T_MAX_DAYS,
+        density_profile="uniform",
+    )
+    expected_time = np.linspace(
+        T_MAX_DAYS / NY,
+        T_MAX_DAYS,
+        NY,
+    ) * DAY
+    reconstructed = 4.0 * PI * SIGMA_SB * state.Rph**2 * state.Tph**4
+
+    regression_theta = (
+        3.0,
+        1.0,
+        1.5,
+        0.08,
+        120.0,
+        0.2,
+        0.12,
+        0.03,
+        4500.0,
+    )
+    regression = model.calculate_transport(
+        regression_theta,
+        Nx=30,
+        Ny=40,
+        t_max_days=20.0,
+        density_profile="uniform",
+    )
+    sample = np.array([0, 4, 19, 39])
+    expected_lbol = np.array([
+        4.251858603503674e41,
+        1.891120557627752e41,
+        2.864828527043953e41,
+        1.2153136980922354e42,
+    ])
+    expected_temperature = np.array([
+        19517.924591761748,
+        7531.442382995671,
+        4500.0,
+        4500.0,
+    ])
+    expected_radius = np.array([
+        6.412296018535892e13,
+        2.872068009267946e14,
+        9.901835714486038e14,
+        2.0394384208131972e15,
+    ])
+
+    assert state.density_profile == "uniform"
+    assert np.all(state.Ldirect == 0.0)
+    assert np.all(state.photosphere_valid)
+    assert np.all(state.q_ph == 1.0)
+    metrics = {
+        "component_closure": _max_relative(state.Lphotospheric, state.Lbol),
+        "stefan_boltzmann": _max_relative(
+            reconstructed,
+            np.maximum(state.Lbol, 0.0),
+        ),
+        "linear_time_grid": _max_relative(state.t_s, expected_time),
+        "historical_lbol_regression": _max_relative(
+            regression.Lbol[sample], expected_lbol
+        ),
+        "historical_temperature_regression": _max_relative(
+            regression.Tph[sample], expected_temperature
+        ),
+        "historical_radius_regression": _max_relative(
+            regression.Rph[sample], expected_radius
+        ),
+        "valid_photosphere_steps": int(np.count_nonzero(state.photosphere_valid)),
+        "first_thin_day": None,
+    }
+    for key, threshold in UNIFORM_THRESHOLDS.items():
+        if metrics[key] > threshold:
+            raise RuntimeError(
+                f"uniform: {key}={metrics[key]:.6e} exceeds {threshold:.6e}"
+            )
+    return metrics
+
+
 def _transport_metrics(profile: str) -> dict:
+    if profile not in PHOTOSPHERIC_PROFILES:
+        raise ValueError(f"Physical-photosphere metrics do not support {profile!r}.")
     model = NickelModel()
     state = model.calculate_transport(
         THETA,
@@ -167,6 +266,41 @@ def _transport_metrics(profile: str) -> dict:
     assert np.all(state.Lphotospheric[thin] == 0.0)
     assert np.all(np.isnan(state.Rph[thin]))
     assert np.all(np.isnan(state.Tph[thin]))
+
+    sed_temperature, sed_radius = _nickel_photospheric_blackbody(
+        state,
+        PARAMS["T_floor"],
+    )
+    sed_luminosity = (
+        4.0 * PI * SIGMA_SB * sed_radius**2 * sed_temperature**4
+    )
+    multiband_sb_error = _max_relative(sed_luminosity, state.Lbol)
+    direct_radius = np.sqrt(
+        state.Ldirect
+        / (4.0 * PI * SIGMA_SB * PARAMS["T_floor"] ** 4)
+    )
+    combined_radius = np.sqrt(
+        np.where(valid, state.Rph**2, 0.0) + direct_radius**2
+    )
+    trial_temperature = (
+        state.Lbol
+        / (4.0 * PI * SIGMA_SB * combined_radius**2)
+    ) ** 0.25
+    use_combined_radius = valid & (trial_temperature > PARAMS["T_floor"])
+    multiband_combined_radius_error = _max_relative(
+        sed_radius,
+        combined_radius,
+        use_combined_radius,
+    )
+    np.testing.assert_allclose(
+        sed_temperature[use_combined_radius],
+        trial_temperature[use_combined_radius],
+        rtol=0.0,
+        atol=0.0,
+    )
+    assert np.all(
+        sed_temperature[~use_combined_radius] == PARAMS["T_floor"]
+    )
 
     convergence_state = model.calculate_transport(
         THETA,
@@ -271,7 +405,7 @@ def _transport_metrics(profile: str) -> dict:
         solver_kwargs={"Nx": NX, "Ny": NY, "density_profile": profile},
     )
     ratio = multiband.y["V"][thin] / bolometric.Lbol[thin]
-    homologous_floor_flux_ratio_error = (
+    thin_floor_flux_ratio_error = (
         float(np.max(np.abs(ratio / ratio[0] - 1.0))) if ratio.size else 0.0
     )
 
@@ -279,6 +413,8 @@ def _transport_metrics(profile: str) -> dict:
         "component_closure": closure,
         "stefan_boltzmann": sb_error,
         "photosphere_tau": tau_error,
+        "multiband_stefan_boltzmann": multiband_sb_error,
+        "multiband_combined_radius": multiband_combined_radius_error,
         "thin_heating": thin_heating_error,
         "spatial_convergence_after_5d": spatial_error,
         "spatial_convergence_before_5d_diagnostic": early_spatial_error,
@@ -291,7 +427,7 @@ def _transport_metrics(profile: str) -> dict:
         "temporal_peak_normalized_by_day_diagnostic": (
             temporal_peak_normalized_by_day
         ),
-        "homologous_floor_flux_ratio": homologous_floor_flux_ratio_error,
+        "thin_floor_flux_ratio": thin_floor_flux_ratio_error,
         "first_thin_day": float(state.t_s[np.argmax(thin)] / DAY) if np.any(thin) else None,
         "valid_photosphere_steps": int(np.count_nonzero(valid)),
     }
@@ -310,10 +446,22 @@ def main() -> Path:
             "Nx": NX,
             "Ny": NY,
             "t_max_days": T_MAX_DAYS,
-            "time_grid": "quadratic_nested",
+            "time_grid": {
+                "uniform": "linear_legacy",
+                "bpl_ia": "quadratic_nested",
+            },
         },
-        "thresholds": THRESHOLDS,
-        "profiles": {profile: _transport_metrics(profile) for profile in PROFILES},
+        "thresholds": {
+            "uniform": UNIFORM_THRESHOLDS,
+            "bpl_ia": THRESHOLDS,
+        },
+        "profiles": {
+            "uniform": _uniform_transport_metrics(),
+            **{
+                profile: _transport_metrics(profile)
+                for profile in PHOTOSPHERIC_PROFILES
+            },
+        },
     }
     METRICS_PATH.parent.mkdir(parents=True, exist_ok=True)
     METRICS_PATH.write_text(

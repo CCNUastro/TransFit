@@ -21,6 +21,8 @@ from transfit.constants import (
     EPSILON_NI,
     M_SUN,
     R_SUN,
+    TAU_CO,
+    TAU_NI,
 )
 from transfit.models.nickel import (
     _PROFILE_Q_MAX,
@@ -174,8 +176,12 @@ def _solve_lightcurve(profile: str):
     )
 
 
-def _radioactive_deposition(t_days: np.ndarray) -> np.ndarray:
-    """Return the Ni/Co heating deposited by the solver's leakage model."""
+def _radioactive_deposition(
+    t_days: np.ndarray,
+    *,
+    legacy_uniform: bool = False,
+) -> np.ndarray:
+    """Return the profile-selected historical or current heating source."""
     t_s = np.asarray(t_days, dtype=float) * DAY
     t_gamma = np.sqrt(
         3.0
@@ -185,10 +191,21 @@ def _radioactive_deposition(t_days: np.ndarray) -> np.ndarray:
         / (4.0 * np.pi * (PARAMS["v_ej"] * 1.0e9) ** 2)
     )
 
-    specific_heating = (
-        (EPSILON_NI - EPSILON_CO)
-        * _radioactive_heating_shape(t_s, t_gamma)
-    )
+    if legacy_uniform:
+        deposition = np.zeros_like(t_s)
+        positive = t_s > 0.0
+        deposition[positive] = 1.0 - np.exp(
+            -(t_gamma / t_s[positive]) ** 2
+        )
+        specific_heating = (
+            (EPSILON_NI - EPSILON_CO) * np.exp(-t_s / TAU_NI)
+            + EPSILON_CO * np.exp(-t_s / TAU_CO) * deposition
+        )
+    else:
+        specific_heating = (
+            (EPSILON_NI - EPSILON_CO)
+            * _radioactive_heating_shape(t_s, t_gamma)
+        )
     return PARAMS["M_ni"] * M_SUN * specific_heating
 
 
@@ -216,7 +233,16 @@ def plot_lightcurve_effect() -> Path:
         color="0.15",
         linestyle=":",
         linewidth=2.0,
-        label=r"Deposited $^{56}$Ni+$^{56}$Co heating",
+        label=r"BPL/Ia deposited heating",
+        zorder=2,
+    )
+    ax.plot(
+        heating_time,
+        _radioactive_deposition(heating_time, legacy_uniform=True),
+        color="0.45",
+        linestyle=(0, (3, 1, 1, 1)),
+        linewidth=1.7,
+        label=r"Uniform legacy heating source",
         zorder=2,
     )
 
@@ -226,7 +252,7 @@ def plot_lightcurve_effect() -> Path:
         ylim=(3.0e40, 3.0e43),
         xlabel="Rest-frame time since explosion (d)",
         ylabel=r"Bolometric luminosity (erg s$^{-1}$)",
-        title="Density-profile effect on the nickel light curve",
+        title="Profile-selected nickel transport",
     )
     parameter_text = (
         rf"$M_{{\rm ej}}={PARAMS['M_ej']:g}\,M_\odot$, "

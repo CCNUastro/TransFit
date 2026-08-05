@@ -174,6 +174,13 @@ def test_public_api_can_select_uniform_bpl_and_exponential_density_profiles():
     )
 
     np.testing.assert_allclose(default.Lbol, uniform.Lbol, rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(
+        uniform.Lphotospheric, uniform.Lbol, rtol=0.0, atol=0.0
+    )
+    assert np.all(uniform.Ldirect == 0.0)
+    assert np.all(uniform.photosphere_valid)
+    assert np.all(np.isfinite(uniform.Teff))
+    assert np.all(np.isfinite(uniform.Rph))
     np.testing.assert_allclose(bpl.Lbol, bpl_canonical.Lbol, rtol=0.0, atol=0.0)
     np.testing.assert_allclose(
         exponential.Lbol,
@@ -261,7 +268,7 @@ def test_forward_multiband_light_curve_is_finite():
     assert np.all(np.isfinite(lc.y["V"]))
 
 
-def test_nickel_homologous_multiband_continues_after_physical_photosphere_is_thin():
+def test_nickel_photospheric_floor_multiband_continues_after_photosphere_is_thin():
     params = {
         "M_ej": 1.0,
         "v_ej": np.sqrt(2.0e51 / M_SUN) / 1.0e9,

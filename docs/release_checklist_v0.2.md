@@ -2,26 +2,29 @@
 
 ## 生产物理
 
-- 唯一的 bolometric 输运区域为 `q_min <= q <= q_ph(t)`，其中
-  `tau(q_ph -> 1)=2/3`。
-- 最外活动层是终止于 `q_ph` 的真实 cut cell；光球外的 Nickel 沉积不进入
-  扩散矩阵。
-- 输出严格满足 `Lbol=Lphotospheric+Ldirect`。
-- 物理光球采用 `Rph=Rout*q_ph` 和
+- Uniform 使用历史固定外边界 Crank--Nicolson 求解，返回
+  `Lphotospheric=Lbol`、`Ldirect=0`。
+- BPL 与 Ia/exponential 的输运区域为 `q_min <= q <= q_ph(t)`，其中
+  `tau(q_ph -> 1)=2/3`；最外活动层是真实 cut cell。
+- BPL/Ia 输出严格满足 `Lbol=Lphotospheric+Ldirect`。
+- BPL/Ia 物理光球采用 `Rph=Rout*q_ph` 和
   `Tph=(Lphotospheric/(4*pi*sigma*Rph**2))**0.25`，不加温度地板。
-- 完全光学薄后 `Lphotospheric=0`、`Ldirect=Lbol=deposited heating`、
+- BPL/Ia 完全光学薄后 `Lphotospheric=0`、`Ldirect=Lbol=deposited heating`、
   `photosphere_valid=False`，且 `Rph/Tph=NaN`。
 - 使用固定灰 `kappa`；本版本不包含复合 opacity。
-- 时间积分采用固定嵌套二次网格 `t_i=t_max*(i/Ny)^2`，每步扩散系数、源项和
-  swept-energy 都使用各自的局部步长。
+- Uniform 保留历史线性时间网格；BPL/Ia 使用嵌套二次时间网格。
 
 ## 多波段
 
-- 只保留完整 `Lbol`、`Rhom=R_0+v_max*t` 与 `T_floor` 的同模膨胀黑体。
+- Uniform 使用历史同模半径；BPL/Ia 把 `Ldirect` 换算成 4500 K 等效面积，
+  并与真实 `tau=2/3` 光球面积相加。
+- 高温时使用相应的同模或合并半径；其余时刻固定
+  地板温度并由完整 `Lbol` 反算半径。分支逐时刻可逆，不锁定历史状态。
+- 完全光学薄后合并半径自然退化为 `Ldirect` 的地板温度等效半径。
 - `T_floor` 默认固定 4500 K；只有 `fit_multiband` 可通过
   `priors={"T_floor": (3000, 10000)}` 采样。
-- 不再提供 `emission_mode`、`T_neb` 或单独的星云 SED；该映射不改变
-  bolometric 输运。
+- 不提供 `emission_mode`、`T_neb`、
+  单独的 `Ldirect` 或星云 SED；该映射不改变 bolometric 输运。
 
 ## 自动验证
 
@@ -32,9 +35,10 @@ python scripts/validate_nickel_photospheric_release.py
 pytest -q
 ```
 
-科学 gate 检查分量闭合、`tau=2/3`、Stefan--Boltzmann、完全光学薄尾部、
-空间/时间收敛和进入 `T_floor` 后的 `Fnu/Lbol`。结果写入
-`result/tables/nickel-photosphere-homologous-release-metrics.json`。
+科学 gate 检查 Uniform 历史回归，以及 BPL/Ia 的分量闭合、`tau=2/3`、
+Stefan--Boltzmann、完全光学薄尾部、
+空间/时间收敛、物理光球黑体关系和完全光学薄后 `Fnu/Lbol`。结果写入
+`result/tables/nickel-photosphere-floor-release-metrics.json`。
 目标 `Nx=100, Ny=1000` 网格要求 5 d 后空间误差和 10 d 后时间误差均小于
 0.5%；1.5 d 另以相对峰值的绝对差小于 `5e-4` 放行。更早阶段在局部光度几乎
 为零时的一阶 backward-Euler 相对差异仍保留为独立 diagnostic，不用很小的

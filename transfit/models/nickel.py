@@ -37,10 +37,10 @@ _TIME_GRID_POWER = 2.0
 class NickelTransportState:
     """Solved bolometric transport state for the Nickel model.
 
-    The diffusion domain ends at the physical ``tau=2/3`` photosphere.  Power
-    deposited outside that domain is carried by ``Ldirect`` and never enters
-    the diffusion matrix.  ``Rph`` and ``Tph`` are intentionally NaN once the
-    represented ejecta is completely optically thin.
+    Uniform density preserves the historical fixed-outer-boundary solve and
+    homologous effective blackbody.  BPL and exponential density use the
+    physical ``tau=2/3`` diffusion boundary; power deposited outside that
+    domain is carried by ``Ldirect`` and never enters the diffusion matrix.
     """
 
     t_s: np.ndarray
@@ -52,6 +52,7 @@ class NickelTransportState:
     Tph: np.ndarray
     Rhom: np.ndarray
     photosphere_valid: np.ndarray
+    density_profile: str
 
 # -----------------------------------------------------------------------------
 # Core solver functions (Numba JIT)
@@ -109,6 +110,33 @@ def _integral_power_law(x_lo, x_hi, power):
     if abs(exponent) < 1.0e-12:
         return float(np.log(x_hi / x_lo))
     return float((x_hi**exponent - x_lo**exponent) / exponent)
+
+
+def _legacy_uniform_ni_source_profile(x_vals, x_heat, xi0):
+    """Return the exact historical control-volume Uniform Ni source."""
+    x_vals = np.asarray(x_vals, dtype=float)
+    source_profile = np.zeros_like(x_vals)
+    if xi0 <= 0.0 or x_heat <= x_vals[0] or x_vals.size < 3:
+        return source_profile
+
+    x_inner = x_vals[1:-1]
+    edges = np.empty(x_inner.size + 1, dtype=float)
+    edges[0] = x_vals[0]
+    edges[-1] = x_vals[-1]
+    if x_inner.size > 1:
+        edges[1:-1] = 0.5 * (x_inner[:-1] + x_inner[1:])
+
+    lower = edges[:-1]
+    upper = edges[1:]
+    mixed_upper = np.minimum(upper, float(x_heat))
+    active = mixed_upper > lower
+    mixed_mass = np.zeros_like(lower)
+    mixed_mass[active] = (
+        mixed_upper[active] ** 3 - lower[active] ** 3
+    ) / 3.0
+    cell_volume = (upper**3 - lower**3) / 3.0
+    source_profile[1:-1] = float(xi0) * mixed_mass / cell_volume
+    return source_profile
 
 
 def _exponential_tail_moment(x, order):
@@ -625,6 +653,83 @@ def thomas_algorithm(a, b, c_up, d, c_prime, d_prime, x_out):
 
 
 @numba.njit(fastmath=True, cache=True)
+def _fast_time_loop_uniform_legacy_numba(
+    Ny,
+    Nx,
+    dx,
+    dy,
+    fR_vals,
+    f_ob_vals,
+    heat_vals,
+    source_profile,
+    upper_coeff,
+    lower_coeff,
+    e_initial,
+    Lfac,
+):
+    """Run the historical Crank--Nicolson Uniform outer-boundary solve."""
+    implicit_weight = 0.5
+    e_now = e_initial.copy()
+    e_next = np.empty_like(e_now)
+    L_bol_out = np.zeros(Ny)
+
+    a = np.zeros(Nx + 1)
+    b_diag = np.zeros(Nx + 1)
+    c_up = np.zeros(Nx + 1)
+    rhs = np.zeros(Nx + 1)
+    c_prime = np.zeros(Nx + 1)
+    d_prime = np.zeros(Nx + 1)
+
+    i_mid = slice(1, Nx)
+    im1 = slice(0, Nx - 1)
+    ip1 = slice(2, Nx + 1)
+    source_inner = source_profile[1:-1]
+
+    for time_index in range(Ny):
+        fR_now = fR_vals[time_index]
+        fR_next = fR_vals[time_index + 1]
+
+        b_diag[i_mid] = 1.0 + implicit_weight * fR_next * (
+            upper_coeff + lower_coeff
+        )
+        c_up[i_mid] = -implicit_weight * fR_next * upper_coeff
+        a[i_mid] = -implicit_weight * fR_next * lower_coeff
+
+        b_diag[0] = -1.0
+        c_up[0] = 1.0
+        a[0] = 0.0
+
+        b_diag[Nx] = dx - f_ob_vals[time_index + 1]
+        a[Nx] = f_ob_vals[time_index + 1]
+        c_up[Nx] = 0.0
+
+        S_now_inner = source_inner * (fR_now * heat_vals[time_index])
+        S_next_inner = source_inner * (fR_next * heat_vals[time_index + 1])
+        rhs[i_mid] = (
+            e_now[i_mid]
+            + dy
+            * (
+                (1.0 - implicit_weight) * S_now_inner
+                + implicit_weight * S_next_inner
+            )
+            + (1.0 - implicit_weight)
+            * fR_now
+            * (
+                upper_coeff * (e_now[ip1] - e_now[i_mid])
+                - lower_coeff * (e_now[i_mid] - e_now[im1])
+            )
+        )
+        rhs[0] = 0.0
+        rhs[Nx] = 0.0
+
+        thomas_algorithm(a, b_diag, c_up, rhs, c_prime, d_prime, e_next)
+        L_bol_out[time_index] = Lfac * (e_next[Nx - 1] - e_next[Nx])
+        e_now, e_next = e_next, e_now
+
+    return L_bol_out
+
+
+@numba.njit(fastmath=True, cache=True)
 def _fast_time_loop_photosphere_kernel(
     Ny,
     n_cells,
@@ -753,6 +858,144 @@ def _fast_time_loop_photosphere_numba(
     )
 
 
+def _calculate_uniform_legacy_transport(
+    *,
+    M_ej,
+    v_ej,
+    E_Th_in,
+    M_ni,
+    R_max_in,
+    f_ni,
+    kappa0,
+    kappa_gamma,
+    T_floor,
+    Nx,
+    Ny,
+    t_max_days,
+):
+    """Reproduce the historical Uniform outer-boundary Nickel solver."""
+    Nx, Ny = int(Nx), int(Ny)
+    if Nx < 2 or Ny < 1:
+        raise ValueError("NickelModel requires Nx >= 2 and Ny >= 1.")
+
+    x_min, x_max = 1.0, 1.0e4
+    I_M = _integral_power_law(x_min, x_max, 2.0)
+    I_K = _integral_power_law(x_min, x_max, 4.0)
+    E_K = 0.5 * float(M_ej) * float(v_ej) ** 2
+    rho_scale, v_scale, R_scale = _finite_profile_scales(
+        M_ej,
+        E_K,
+        R_max_in,
+        x_max,
+        I_M,
+        I_K,
+    )
+    t_ex = R_scale / v_scale
+    t_diff = 3.0 * float(kappa0) * rho_scale * R_scale**2 / C_LIGHT
+    t_gamma = np.sqrt(
+        3.0
+        * float(kappa_gamma)
+        * float(M_ej)
+        / (4.0 * PI * float(v_ej) ** 2)
+    )
+
+    u0 = rho_scale * (EPSILON_NI - EPSILON_CO) * t_diff
+    L0 = (
+        4.0 * PI * R_scale * C_LIGHT * u0
+        / (3.0 * float(kappa0) * rho_scale)
+    )
+    tau_scale = float(kappa0) * rho_scale * R_scale
+    e0_coeff = float(E_Th_in) / (
+        2.0 * PI * u0 * x_max**2 * R_scale**3
+    )
+
+    if float(f_ni) <= 0.0:
+        x_heat = x_min
+    elif float(f_ni) >= 1.0:
+        x_heat = x_max
+    else:
+        x_heat = (
+            x_min**3 + float(f_ni) * (x_max**3 - x_min**3)
+        ) ** (1.0 / 3.0)
+    if x_heat <= x_min + 1.0e-14:
+        xi0 = 0.0
+    else:
+        mixed_mass = _integral_power_law(x_min, x_heat, 2.0)
+        xi0 = (I_M * (float(M_ni) / float(M_ej))) / mixed_mass
+    xi0 = max(float(xi0), 0.0)
+
+    x_vals = np.linspace(x_min, x_max, Nx + 1)
+    dx = (x_max - x_min) / Nx
+    x2 = x_vals * x_vals
+
+    t_max = float(t_max_days) * DAY
+    y_max = t_max / t_diff
+    y_vals = np.linspace(0.0, y_max, Ny + 1)
+    dy = y_vals[1] - y_vals[0]
+    fR_vals = 1.0 + (y_vals * t_diff / t_ex)
+    f_ob_vals = -(4.0 / (3.0 * tau_scale)) * (fR_vals * fR_vals)
+
+    t_phys = y_vals * t_diff
+    e_co_ratio = EPSILON_CO / (EPSILON_NI - EPSILON_CO)
+    heat = np.exp(-t_phys / TAU_NI)
+    co_deposition = np.zeros_like(t_phys)
+    positive_time = t_phys > 0.0
+    co_deposition[positive_time] = 1.0 - np.exp(
+        -(t_gamma / t_phys[positive_time]) ** 2
+    )
+    heat += e_co_ratio * np.exp(-t_phys / TAU_CO) * co_deposition
+
+    source_profile = _legacy_uniform_ni_source_profile(x_vals, x_heat, xi0)
+    x_inner = x_vals[1:-1]
+    face_area = 0.5 * (x2[:-1] + x2[1:])
+    coeff_norm = dy / (x_inner * dx) ** 2
+    lower_coeff = coeff_norm * face_area[:-1]
+    upper_coeff = coeff_norm * face_area[1:]
+
+    e_initial = e0_coeff / x_vals
+    Lfac = L0 * x_max**2 / dx
+    L_out = _fast_time_loop_uniform_legacy_numba(
+        Ny,
+        Nx,
+        dx,
+        dy,
+        fR_vals,
+        f_ob_vals,
+        heat,
+        source_profile,
+        upper_coeff,
+        lower_coeff,
+        e_initial,
+        Lfac,
+    )
+
+    t_s = (y_vals * t_diff)[1:]
+    R_hom = float(R_max_in) * fR_vals[1:]
+    L_positive = np.where(L_out > 0.0, L_out, 0.0)
+    T_try = (
+        L_positive / (4.0 * PI * SIGMA_SB * R_hom**2)
+    ) ** 0.25
+    R_floor = np.sqrt(
+        L_positive / (4.0 * PI * SIGMA_SB * float(T_floor) ** 4)
+    )
+    above_floor = T_try > float(T_floor)
+    T_effective = np.where(above_floor, T_try, float(T_floor))
+    R_effective = np.where(above_floor, R_hom, R_floor)
+
+    return NickelTransportState(
+        t_s=np.asarray(t_s, float),
+        Lbol=np.asarray(L_out, float),
+        Lphotospheric=np.asarray(L_out, float).copy(),
+        Ldirect=np.zeros(Ny, dtype=float),
+        q_ph=np.ones(Ny, dtype=float),
+        Rph=np.asarray(R_effective, float),
+        Tph=np.asarray(T_effective, float),
+        Rhom=np.asarray(R_hom, float),
+        photosphere_valid=np.ones(Ny, dtype=bool),
+        density_profile="uniform",
+    )
+
+
 class NickelModel:
     """
     Canonical nickel-powered model.
@@ -791,27 +1034,25 @@ class NickelModel:
         t_max_days=150.0,
         density_profile="uniform",
     ) -> NickelTransportState:
-        """Solve the Nickel model inside the moving physical photosphere.
+        """Solve the profile-selected Nickel transport problem.
 
         Parameters
         ----------
         density_profile : {"uniform", "bpl", "broken_power_law", "exp", "exponential", "ia", "auto"}, optional
-            ``uniform`` is the backward-compatible default.  ``bpl`` and
-            ``broken_power_law`` select homologously expanding ejecta with
-            a break at ``q_t=1/3``; ``exponential`` (or ``exp``/``ia``) uses
-            the scale ``q_e=1/12``.  Every profile is evaluated on the common
-            coordinate ``q=v/v_max=r/R_out`` from ``1e-4`` to ``1``.
+            ``uniform`` is the backward-compatible default and selects the
+            historical fixed-outer-boundary Crank--Nicolson solver. ``bpl`` and
+            ``broken_power_law`` select the current physical-photosphere BPL
+            solve; ``exponential`` (or ``exp``/``ia``) selects the corresponding
+            finite exponential Type-Ia-like solve.
             The legacy direct-call value ``auto`` selects BPL for the canonical
             parameter form and uniform density for legacy input.
         Notes
         -----
-        ``delta`` and ``n`` are physical BPL structure parameters in ``theta``.
-        Nine- and seven-parameter legacy vectors default to ``delta=0`` and
-        ``n=10``.  Encoding ``q_t=1/3`` and ``q_e=1/12`` inside ``eta(q)``
-        preserves ``v_max=3 v_t`` and ``v_max=12 v_e`` while giving Uniform,
-        BPL, and exponential ejecta the same computational domain. Every
-        represented finite domain is normalized inside ``R_0`` to the requested
-        ejecta mass and kinetic energy.
+        Uniform reproduces the historical ``x=1..1e4`` grid, linear time grid,
+        Co-only gamma leakage, outer-boundary luminosity, and homologous
+        temperature-floor mapping. BPL and exponential use the common
+        ``q=v/v_max=r/R_out`` coordinate from ``1e-4`` to ``1``, a quadratic
+        time grid, and the moving ``tau=2/3`` finite-volume boundary.
 
         ``f_ni`` is the Lagrangian mass coordinate of the outer edge of the
         Ni-mixed region: ``f_ni=M(<q_Ni)/M_ej``.  The solver derives the
@@ -819,7 +1060,7 @@ class NickelModel:
         fraction.  The Ni abundance is constant inside that cutoff and zero
         outside, with mass-integral normalization to ``M_ni``.
 
-        Spatial diffusion is discretized with cell-centred spherical finite
+        For BPL and exponential, spatial diffusion is discretized with spherical finite
         volumes. Density and radioactive heating are exact shell averages and
         internal face fluxes use a harmonic diffusion coefficient. In the
         production solve the outermost active cell is cut continuously by the
@@ -827,7 +1068,7 @@ class NickelModel:
         released explicitly, while the remaining stored energy is conserved.
         There is no fitted or forced late-time matching factor.
 
-        The returned physical radius is ``Rph=Rhom*q_ph`` and its temperature is
+        For BPL and exponential, the physical radius is ``Rph=Rhom*q_ph`` and its temperature is
         determined only from ``Lphotospheric`` through the Stefan--Boltzmann
         relation.  No temperature floor is applied.  After the represented
         ejecta becomes completely optically thin, ``Rph`` and ``Tph`` are NaN
@@ -897,14 +1138,13 @@ class NickelModel:
         density_profile = (
             str(density_profile).strip().lower().replace("-", "_").replace(" ", "_")
         )
-        if density_profile == "bpl":
-            density_profile = "broken_power_law"
-        if density_profile == "exp":
-            density_profile = "exponential"
-        if density_profile == "ia":
-            density_profile = "exponential"
         if density_profile == "auto":
             density_profile = "uniform" if is_legacy_theta else "broken_power_law"
+        density_profile = {
+            "bpl": "broken_power_law",
+            "exp": "exponential",
+            "ia": "exponential",
+        }.get(density_profile, density_profile)
         if density_profile not in {"broken_power_law", "exponential", "uniform"}:
             raise ValueError(
                 "density_profile must be 'uniform', 'bpl'/'broken_power_law', "
@@ -913,6 +1153,22 @@ class NickelModel:
 
         delta = float(delta)
         n = float(n)
+
+        if density_profile == "uniform":
+            return _calculate_uniform_legacy_transport(
+                M_ej=M_ej,
+                v_ej=v_ej,
+                E_Th_in=E_Th_in,
+                M_ni=M_ni,
+                R_max_in=R_max_in,
+                f_ni=f_ni,
+                kappa0=kappa0,
+                kappa_gamma=kappa_g,
+                T_floor=float(_T_floor),
+                Nx=Nx,
+                Ny=Ny,
+                t_max_days=t_max_days,
+            )
 
         q_min = _PROFILE_Q_MIN
         q_max = _PROFILE_Q_MAX
@@ -1093,6 +1349,7 @@ class NickelModel:
             Tph=T_ph,
             Rhom=np.asarray(R_hom, float),
             photosphere_valid=np.asarray(photosphere_valid, bool),
+            density_profile=density_profile,
         )
 
     def calculate_light_curve(self, theta, **kwargs):

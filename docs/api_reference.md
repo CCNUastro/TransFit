@@ -41,7 +41,7 @@ should use the canonical names.
 | `f_ni` | outer Lagrangian mass coordinate of the Ni-mixed region, $M(<x_{\rm Ni})/M_{\rm ej}$ |
 | `kappa` | optical opacity, ${\rm cm^2\,g^{-1}}$ |
 | `kappa_gamma` | gamma-ray opacity, ${\rm cm^2\,g^{-1}}$ |
-| `T_floor` | temperature floor for the Nickel homologous multi-band blackbody; defaults to 4500 K |
+| `T_floor` | temperature floor for the Nickel physical-photosphere multi-band blackbody; defaults to 4500 K |
 | `delta` | inner BPL density index, dimensionless |
 | `n` | outer BPL density index, dimensionless |
 
@@ -172,12 +172,14 @@ Returns `BolometricLC` with:
 - `Lbol`
 - `Teff`
 - `Rph`
-- `Lphotospheric`: luminosity emerging from the physical photosphere
-- `Ldirect`: deposited power outside the photosphere
-- `photosphere_valid`: validity mask for physical `Teff` and `Rph`
+- `Lphotospheric`: Uniform outer-boundary luminosity or BPL/Ia photospheric luminosity
+- `Ldirect`: zero for Uniform; deposited power outside the BPL/Ia photosphere
+- `photosphere_valid`: all true for the Uniform effective blackbody; physical mask for BPL/Ia
 
-For nickel, `Lbol = Lphotospheric + Ldirect`. Once the ejecta is fully optical
-thin, `Lphotospheric=0`, `photosphere_valid=False`, and `Teff/Rph` are `NaN`.
+Uniform returns `Lphotospheric=Lbol`, `Ldirect=0`, and the historical effective
+blackbody `Teff/Rph`. BPL and Ia/exponential satisfy
+`Lbol=Lphotospheric+Ldirect`; after complete optical transparency they return
+`Lphotospheric=0`, `photosphere_valid=False`, and physical `Teff/Rph=NaN`.
 
 Multi-band forward call:
 
@@ -204,8 +206,7 @@ Returns `MultiBandLC` with:
 - `bands`
 - `y[band]`
 
-Nickel has one production multi-band mapping. It uses the complete physical
-transport luminosity and the homologous outer radius,
+Uniform uses its historical homologous radius,
 
 \[
 R_{\rm hom}=R_0+v_{\max}t,\qquad
@@ -213,16 +214,31 @@ T_{\rm try}=\left(\frac{L_{\rm bol}}
 {4\pi\sigma R_{\rm hom}^2}\right)^{1/4}.
 \]
 
-When `T_try > T_floor`, the blackbody uses `(R_hom, T_try)`. Otherwise it fixes
-`T=T_floor` and uses
+BPL and Ia/exponential convert `Ldirect` to a floor-temperature radius and add
+its area to the physical photospheric area:
 
 \[
-R_{\rm eff}=\left(\frac{L_{\rm bol}}
+R_{\rm direct}=\left(\frac{L_{\rm direct}}
+{4\pi\sigma T_{\rm floor}^4}\right)^{1/2},\qquad
+R_{\rm try}=\left(R_{\rm ph}^2+R_{\rm direct}^2\right)^{1/2},
+\]
+
+\[
+T_{\rm try}=\left(\frac{L_{\rm bol}}
+{4\pi\sigma R_{\rm try}^2}\right)^{1/4}.
+\]
+
+The hot branch uses `(Rhom,T_try)` for Uniform and `(R_try,T_try)` for BPL/Ia.
+Otherwise it uses
+
+\[
+T_{\rm BB}=T_{\rm floor},\qquad
+R_{\rm BB}=\left(\frac{L_{\rm bol}}
 {4\pi\sigma T_{\rm floor}^4}\right)^{1/2}.
 \]
 
-This keeps the multi-band continuum finite after the physical photosphere has
-disappeared, without introducing a separate nebular temperature or SED mode.
+After complete optical transparency, `R_try=R_direct` and the mapping naturally
+stays on the floor. No separate nebular SED mode is introduced.
 
 The observer-frame conversion is
 
@@ -402,10 +418,8 @@ data and the allowed `t_shift` range.
 
 `Nx` and `Ny` must be positive integers.
 
-For Nickel transport, the `Ny` output/integration nodes use the fixed nested
-quadratic grid `t_i=t_max*(i/Ny)^2`. This concentrates resolution during the
-rapid first few days while keeping `Ny` as the only public time-grid control;
-doubling `Ny` retains every node of the coarser grid.
+Uniform preserves the historical linear nodes `t_i=t_max*i/Ny`. BPL and
+Ia/exponential use the nested quadratic grid `t_i=t_max*(i/Ny)^2`.
 
 For the `nickel` model, `solver_kwargs` additionally accepts:
 
@@ -413,7 +427,11 @@ For the `nickel` model, `solver_kwargs` additionally accepts:
 |---|---|---|
 | `density_profile` | `"uniform"` | Density structure: `"uniform"`, `"bpl"`/`"broken_power_law"`, or `"exp"`/`"exponential"`/`"ia"`. |
 
-The Nickel production transport boundary satisfies
+Uniform density uses the historical fixed outer diffusion boundary and reports
+its outer flux as `Lbol`, with `Ldirect=0`. It preserves full trapping for the
+Ni term and applies gamma leakage only to the Co term. For BPL and
+Ia/exponential, the
+transport boundary satisfies
 
 ```text
 tau(q_ph -> 1) = 2/3.
@@ -435,8 +453,9 @@ T_{\rm ph}=\left(\frac{L_{\rm photospheric}}
 {4\pi\sigma R_{\rm ph}^2}\right)^{1/4}.
 \]
 
-No temperature floor is applied to this physical quantity. The old Nickel
-outer-boundary, FLD, and late-time aliases are not public solver modes.
+No temperature floor is applied to the BPL/Ia physical quantity. The Uniform
+outer boundary is selected by `density_profile="uniform"`; FLD and late-time
+aliases are not public solver modes.
 
 For the `csm` model, `solver_kwargs` additionally accepts:
 
@@ -534,10 +553,10 @@ reject attempts to sample them.
 
 The BPL is normalized using the sampled `M_ej` and `v_ej`, with
 `rho/rho_t = x**(-delta)` below the transition `x=1` and `x**(-n)` above it.
-Every profile is evaluated on the same computational coordinate
-`10^-4 <= q=v/v_max=r/R_out <= 1`. The BPL scale `q_t=v_t/v_max=1/3` and
-the exponential scale `q_e=v_e/v_max=1/12` are encoded inside `eta(q)`.
-The moving-photosphere calculation uses backward Euler for all profiles.
+The historical Uniform solver uses `1 <= x <= 10^4`, equivalent to
+`10^-4 <= q=x/10^4 <= 1`, with Crank--Nicolson. BPL and exponential use the
+common `q` coordinate with backward Euler; `q_t=v_t/v_max=1/3` and
+`q_e=v_e/v_max=1/12` are encoded inside `eta(q)`.
 
 All three profiles are finite at the initial outer radius `R_0`. Their density
 and velocity scales are computed from finite-domain mass and kinetic-energy

@@ -84,12 +84,12 @@ plt.ylabel("Bolometric luminosity (erg s$^{-1}$)")
 plt.show()
 ```
 
-For nickel, the diffusion grid ends at the physical `tau=2/3` photosphere.
-`lc.Lphotospheric` is the luminosity released there, `lc.Ldirect` is deposited
-power outside it, and `lc.Lbol = lc.Lphotospheric + lc.Ldirect`. The returned
-`Rph` and `Teff` are the true grey photospheric quantities without a temperature
-floor. They become `NaN` after the ejecta is fully optically thin, while `Lbol`
-remains finite and follows deposited heating.
+Nickel transport is selected by `solver_kwargs["density_profile"]`. The default
+Uniform profile preserves the historical fixed-outer-boundary luminosity and
+returns `Lphotospheric=Lbol`, `Ldirect=0`, with the original homologous effective
+blackbody. BPL and Ia/exponential profiles use the moving physical `tau=2/3`
+boundary, where `Lbol=Lphotospheric+Ldirect`; their physical `Rph/Teff` become
+`NaN` after complete optical transparency.
 
 <p align="center">
   <img src="docs/lightcurve_bol.png" alt="Bolometric forward model example">
@@ -142,13 +142,13 @@ plt.legend()
 plt.show()
 ```
 
-Nickel multi-band curves use the same physical-photosphere bolometric
-transport, then map the complete `Lbol` to the homologous radius
-`R_hom=R_0+v_max*t`. If the resulting blackbody temperature falls below
-`T_floor`, the temperature is fixed and an effective radius is inferred so the
-blackbody still integrates to `Lbol`. This is a continuum prescription, not a
-nebular-line model. Built-in filters currently evaluate one effective
-frequency; full throughput integration is not yet implemented.
+Uniform multi-band curves use the original homologous radius and pointwise
+`T_floor` mapping. For BPL and Ia/exponential, `Ldirect` supplies an equivalent
+4500 K emitting area that is added to the physical `tau=2/3` photospheric area;
+the complete `Lbol` sets the blackbody temperature on that combined area.
+This is a continuum prescription, not a nebular-line model. Built-in filters
+currently evaluate one effective frequency; full throughput integration is not
+yet implemented.
 
 `filters` maps the band labels in your data to filter definitions. Built-in
 filters use string IDs. Custom mono filters should use an effective wavelength:

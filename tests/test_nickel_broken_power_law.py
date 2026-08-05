@@ -608,7 +608,7 @@ def test_exponential_light_curve_is_positive_distinct_and_has_exact_alias():
 
 @pytest.mark.parametrize(
     "density_profile",
-    ["uniform", "broken_power_law", "exponential"],
+    ["broken_power_law", "exponential"],
 )
 def test_default_fully_thin_tail_equals_deposited_heating(density_profile):
     state = NickelModel().calculate_transport(
@@ -638,9 +638,9 @@ def test_default_fully_thin_tail_equals_deposited_heating(density_profile):
 
 @pytest.mark.parametrize(
     "density_profile",
-    ["uniform", "broken_power_law", "exponential"],
+    ["broken_power_law", "exponential"],
 )
-def test_transport_is_independent_of_homologous_temperature_floor(
+def test_photospheric_transport_is_independent_of_temperature_floor(
     density_profile,
 ):
     low_floor = list(THIN_TAIL_PARAMS)
@@ -679,7 +679,7 @@ def test_transport_is_independent_of_homologous_temperature_floor(
 
 @pytest.mark.parametrize(
     "density_profile",
-    ["uniform", "broken_power_law", "exponential"],
+    ["broken_power_law", "exponential"],
 )
 def test_physical_photosphere_obeys_stefan_boltzmann_without_floor(
     density_profile,
@@ -704,6 +704,87 @@ def test_physical_photosphere_obeys_stefan_boltzmann_without_floor(
         rtol=3.0e-15,
         atol=0.0,
     )
+
+
+def test_uniform_restores_historical_outer_boundary_regression():
+    state = NickelModel().calculate_transport(
+        PARAMS,
+        Nx=30,
+        Ny=40,
+        t_max_days=20.0,
+        density_profile="uniform",
+    )
+    sample = np.array([0, 4, 19, 39])
+
+    np.testing.assert_allclose(
+        state.t_s[sample],
+        [43200.0, 216000.0, 864000.0, 1728000.0],
+        rtol=0.0,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        state.Lbol[sample],
+        [
+            4.251858603503674e41,
+            1.891120557627752e41,
+            2.864828527043953e41,
+            1.2153136980922354e42,
+        ],
+        rtol=3.0e-15,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        state.Tph[sample],
+        [19517.924591761748, 7531.442382995671, 4500.0, 4500.0],
+        rtol=3.0e-15,
+        atol=0.0,
+    )
+    np.testing.assert_allclose(
+        state.Rph[sample],
+        [
+            6.412296018535892e13,
+            2.872068009267946e14,
+            9.901835714486038e14,
+            2.0394384208131972e15,
+        ],
+        rtol=3.0e-15,
+        atol=0.0,
+    )
+    assert state.density_profile == "uniform"
+    np.testing.assert_allclose(state.Lphotospheric, state.Lbol, rtol=0.0, atol=0.0)
+    assert np.all(state.Ldirect == 0.0)
+    assert np.all(state.photosphere_valid)
+    assert np.all(state.q_ph == 1.0)
+
+
+def test_uniform_homologous_floor_changes_only_effective_blackbody():
+    low_floor = list(PARAMS)
+    high_floor = list(PARAMS)
+    low_floor[8] = 1000.0
+    high_floor[8] = 15000.0
+    common = dict(
+        Nx=30,
+        Ny=80,
+        t_max_days=40.0,
+        density_profile="uniform",
+    )
+    low = NickelModel().calculate_transport(tuple(low_floor), **common)
+    high = NickelModel().calculate_transport(tuple(high_floor), **common)
+
+    for name in ("t_s", "Lbol", "Lphotospheric", "Ldirect", "Rhom"):
+        np.testing.assert_allclose(
+            getattr(low, name), getattr(high, name), rtol=0.0, atol=0.0
+        )
+    assert not np.allclose(low.Tph, high.Tph, rtol=1.0e-12, atol=0.0)
+    assert not np.allclose(low.Rph, high.Rph, rtol=1.0e-12, atol=0.0)
+    for state in (low, high):
+        reconstructed = 4.0 * PI * SIGMA_SB * state.Rph**2 * state.Tph**4
+        np.testing.assert_allclose(
+            reconstructed,
+            np.maximum(state.Lbol, 0.0),
+            rtol=5.0e-15,
+            atol=0.0,
+        )
 
 
 @pytest.mark.parametrize(

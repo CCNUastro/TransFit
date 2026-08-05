@@ -671,22 +671,49 @@ def _validate_solved_state(Lbol, Teff, Rph, photosphere_valid=None) -> None:
         )
 
 
-def _nickel_homologous_blackbody(transport, T_floor: float):
-    """Map the physical-photosphere Nickel Lbol to a homologous blackbody."""
+def _nickel_photospheric_blackbody(transport, T_floor: float):
+    """Map Nickel Lbol to a photosphere plus direct-emission effective area.
+
+    ``Ldirect`` is converted to an equivalent emitting area at ``T_floor`` and
+    added to the physical tau=2/3 photospheric area. The complete ``Lbol`` then
+    sets the trial temperature on that combined area. This prevents optically
+    thin power from being compressed onto a vanishing physical photosphere.
+    """
     floor = float(T_floor)
     if not np.isfinite(floor) or floor <= 0.0:
-        raise ValueError("T_floor must be finite and > 0 for homologous emission.")
+        raise ValueError("T_floor must be finite and > 0 for photospheric emission.")
     luminosity = np.asarray(transport.Lbol, float)
-    radius_hom = np.asarray(transport.Rhom, float)
+    direct_luminosity = np.asarray(transport.Ldirect, float)
+    radius_physical = np.asarray(transport.Rph, float)
+    photosphere_valid = np.asarray(transport.photosphere_valid, bool)
+    if not (
+        luminosity.shape
+        == direct_luminosity.shape
+        == radius_physical.shape
+        == photosphere_valid.shape
+    ):
+        raise _NonPhysicalModelOutput(
+            "Nickel Lbol, Ldirect, Rph, and photosphere_valid must have the same shape."
+        )
+
+    radius_direct = np.sqrt(
+        np.maximum(direct_luminosity, 0.0)
+        / (4.0 * PI * SIGMA_SB * floor**4)
+    )
+    radius_try = np.sqrt(
+        np.where(photosphere_valid, radius_physical**2, 0.0)
+        + radius_direct**2
+    )
     temperature_try = (
-        luminosity / (4.0 * PI * SIGMA_SB * radius_hom**2)
+        luminosity
+        / (4.0 * PI * SIGMA_SB * radius_try**2)
     ) ** 0.25
+    use_combined_area = photosphere_valid & (temperature_try > floor)
+    temperature = np.where(use_combined_area, temperature_try, floor)
     radius_floor = np.sqrt(
         luminosity / (4.0 * PI * SIGMA_SB * floor**4)
     )
-    above_floor = temperature_try > floor
-    temperature = np.where(above_floor, temperature_try, floor)
-    radius = np.where(above_floor, radius_hom, radius_floor)
+    radius = np.where(use_combined_area, radius_try, radius_floor)
     return temperature, radius
 
 
@@ -706,15 +733,21 @@ def _evaluate_multiband_solved_state(
     mag_system: str,
     extinction,
 ):
-    """Apply the single production SED mapping to a solved transport state."""
+    """Apply the density-selected Nickel SED mapping to a solved state."""
     if model == "nickel":
         if transport is None:
             raise _NonPhysicalModelOutput("Nickel transport state is unavailable.")
-        values = _model_values_from_vector(model, model_vector)
-        temperature, radius = _nickel_homologous_blackbody(
-            transport,
-            values["T_floor"],
-        )
+        if getattr(transport, "density_profile", None) == "uniform":
+            # The historical Uniform solver already returns its homologous
+            # blackbody with the pointwise temperature-floor mapping applied.
+            temperature = np.asarray(transport.Tph, float)
+            radius = np.asarray(transport.Rph, float)
+        else:
+            values = _model_values_from_vector(model, model_vector)
+            temperature, radius = _nickel_photospheric_blackbody(
+                transport,
+                values["T_floor"],
+            )
     else:
         temperature = np.asarray(Teff, float)
         radius = np.asarray(Rph, float)
