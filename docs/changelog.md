@@ -45,7 +45,8 @@ Here, $a(t)$ is the homologous expansion factor after shock exit.
 - BPL/Ia multi-band emission converts `Ldirect` into an equivalent emitting
   area at $T_{\rm floor}$ before normalizing the blackbody with the complete
   `Lbol`, so exterior power is not compressed onto the retreating photosphere.
-- `R_0` is the finite initial outer radius of the ejecta.
+- `R_0` is the progenitor-star radius and the initial outer radius of the
+  homologously expanding ejecta at explosion.
 - `f_ni` is the Lagrangian mass coordinate reached by nickel mixing. The model
   rejects combinations with `M_ni > f_ni*M_ej`.
 - BPL fits keep `delta=0` and `n=10` fixed by default. Add either parameter to
@@ -62,12 +63,22 @@ Here, $a(t)$ is the homologous expansion factor after shock exit.
 
 ### Nickel density and photosphere
 
-The ejecta expand homologously. Define
+At explosion the ejecta already occupy the progenitor radius $R_\star=R_0$;
+they do not start from zero radius. Define the dimensionless homologous
+expansion factor
 
 ```math
-t_{\rm h}=t+\frac{R_0}{v_{\max}},\qquad
-r=v t_{\rm h},\qquad
-R_{\rm out}=v_{\max}t_{\rm h}=R_0+v_{\max}t .
+a(t)=\frac{R_{\rm out}(t)}{R_\star}
+=1+\frac{v_{\max}t}{R_\star},\qquad
+R_{\rm out}(t)=R_\star+v_{\max}t .
+```
+
+The initial Lagrangian radius and current radius of the shell labelled by $v$
+are
+
+```math
+r_\star(v)=R_\star\frac{v}{v_{\max}},\qquad
+r(v,t)=a(t)r_\star(v)=R_{\rm out}(t)\frac{v}{v_{\max}} .
 ```
 
 The model uses the following three physical density structures. Uniform is
@@ -101,19 +112,19 @@ profile is truncated at $v_{\max}=12v_e$. The three density normalizations
 decline with homologous expansion as
 
 ```math
-\rho_{\rm u}(t)\propto t_{\rm h}^{-3},\qquad
-\rho_t(t)\propto t_{\rm h}^{-3},\qquad
-\rho_e(t)\propto t_{\rm h}^{-3}.
+\rho_{\rm u}(t)\propto a(t)^{-3},\qquad
+\rho_t(t)\propto a(t)^{-3},\qquad
+\rho_e(t)\propto a(t)^{-3}.
 ```
 
 Their normalization and $v_{\max}$ are fixed jointly by the ejecta mass and
 kinetic energy:
 
 ```math
-M_{\rm ej}=4\pi t_{\rm h}^{3}
+M_{\rm ej}=4\pi\left(\frac{R_{\rm out}}{v_{\max}}\right)^3
 \int_0^{v_{\max}}\rho(v,t)v^2\,dv,
 \qquad
-E_K=2\pi t_{\rm h}^{3}
+E_K=2\pi\left(\frac{R_{\rm out}}{v_{\max}}\right)^3
 \int_0^{v_{\max}}\rho(v,t)v^4\,dv
 =\frac{1}{2}M_{\rm ej}v_{\rm ej}^2 .
 ```
@@ -124,7 +135,8 @@ profile. The outward optical depth follows directly from the physical density:
 
 ```math
 \tau(v,t)=\int_{r(v,t)}^{R_{\rm out}(t)}\kappa\rho(r',t)\,dr'
-=\kappa t_{\rm h}\int_v^{v_{\max}}\rho(v',t)\,dv' .
+=\kappa\frac{R_{\rm out}(t)}{v_{\max}}
+\int_v^{v_{\max}}\rho(v',t)\,dv' .
 ```
 
 The density profile automatically selects the radiation boundary. Uniform
@@ -148,7 +160,7 @@ outside escapes directly. Therefore
 
 ```math
 L_{\rm bol}=L_{\rm photospheric}+L_{\rm direct},\qquad
-R_{\rm ph}=v_{\rm ph}t_{\rm h},\qquad
+R_{\rm ph}=R_{\rm out}\frac{v_{\rm ph}}{v_{\max}},\qquad
 T_{\rm ph}=\left(\frac{L_{\rm photospheric}}
 {4\pi\sigma R_{\rm ph}^2}\right)^{1/4} .
 ```
