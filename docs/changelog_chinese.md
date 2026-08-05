@@ -57,20 +57,12 @@ R_{\mathrm{ph}}(t)=a(t)R_{\mathrm{CSM,out}}
 
 ### Nickel 密度与光球计算
 
-抛射物在爆炸时已经占据前身星半径 $R_\star=R_0$，不是从零半径开始。定义
-无量纲同模膨胀因子
+Nickel 抛射物从前身星半径 `R_0` 开始同模膨胀：
 
 ```math
-a(t)=\frac{R_{\rm out}(t)}{R_\star}
-=1+\frac{v_{\max}t}{R_\star},\qquad
-R_{\rm out}(t)=R_\star+v_{\max}t .
-```
-
-速度坐标 $v$ 对应的初始拉格朗日半径和当前半径为
-
-```math
-r_\star(v)=R_\star\frac{v}{v_{\max}},\qquad
-r(v,t)=a(t)r_\star(v)=R_{\rm out}(t)\frac{v}{v_{\max}} .
+R_{\rm out}(t)=R_0+v_{\max}t,
+\qquad
+\rho(v,t)=\rho(v,0)\left(\frac{R_0}{R_{\rm out}(t)}\right)^3 .
 ```
 
 模型采用以下三种物理密度结构。Uniform 为
@@ -99,42 +91,21 @@ Ia/exponential 为
 \qquad 0\le v\le v_{\max}.
 ```
 
-BPL 在 $v_{\max}=3v_t$ 处截断，Ia/exponential 在
-$v_{\max}=12v_e$ 处截断。三种密度的归一化因子均随同模膨胀按下式下降：
-
-```math
-\rho_{\rm u}(t)\propto a(t)^{-3},\qquad
-\rho_t(t)\propto a(t)^{-3},\qquad
-\rho_e(t)\propto a(t)^{-3}.
-```
-
-密度归一化和 $v_{\max}$ 由抛射物质量与动能共同确定：
-
-```math
-M_{\rm ej}=4\pi\left(\frac{R_{\rm out}}{v_{\max}}\right)^3
-\int_0^{v_{\max}}\rho(v,t)v^2\,dv,
-\qquad
-E_K=2\pi\left(\frac{R_{\rm out}}{v_{\max}}\right)^3
-\int_0^{v_{\max}}\rho(v,t)v^4\,dv
-=\frac{1}{2}M_{\rm ej}v_{\rm ej}^2 .
-```
-
-因此输入的 $v_{\rm ej}$ 是由总动能定义的特征速度，而不是所有密度结构
-共用的固定外边界速度。由物理密度直接积分得到向外光深：
+BPL 在 `v_max=3 v_t` 处截断，Ia/exponential 在 `v_max=12 v_e` 处截断。
+向外光深直接由物理密度积分：
 
 ```math
 \tau(v,t)=\int_{r(v,t)}^{R_{\rm out}(t)}\kappa\rho(r',t)\,dr'
-=\kappa\frac{R_{\rm out}(t)}{v_{\max}}
-\int_v^{v_{\max}}\rho(v',t)\,dv' .
 ```
 
-不同密度结构自动选择不同的辐射边界。Uniform 保留原始外边界扩散光度：
+不同密度结构自动选择不同的辐射边界。Uniform 使用外边界扩散光度，BPL/Ia
+使用物理光球和光球外直接逃逸：
 
 ```math
-L_{\rm bol}=L_{\rm out},\qquad L_{\rm direct}=0.
+L_{\rm bol}=L_{\rm out}\quad(\mathrm{Uniform}),\qquad
+L_{\rm bol}=L_{\rm photospheric}+L_{\rm direct}
+\quad(\mathrm{BPL/Ia}).
 ```
-
-该历史路径保留原始 gamma 处理：Ni 项完全俘获，只对 Co 项施加 leakage。
 
 BPL 和 Ia/exponential 的物理光球由
 
@@ -142,17 +113,13 @@ BPL 和 Ia/exponential 的物理光球由
 \tau(v_{\rm ph},t)=\frac{2}{3}
 ```
 
-确定。光球内沉积参与扩散，光球外沉积直接逃逸，因此
+确定。光球半径和光球温度为
 
 ```math
-L_{\rm bol}=L_{\rm photospheric}+L_{\rm direct},\qquad
 R_{\rm ph}=R_{\rm out}\frac{v_{\rm ph}}{v_{\max}},\qquad
 T_{\rm ph}=\left(\frac{L_{\rm photospheric}}
 {4\pi\sigma R_{\rm ph}^2}\right)^{1/4} .
 ```
-
-对于 BPL 和 Ia/exponential，总光深低于 $2/3$ 后，`photosphere_valid=False`、
-`Lphotospheric=0`、`Lbol=Ldirect`，并令物理 `Rph/Teff=NaN`。
 
 ### Nickel 多波段
 
@@ -205,9 +172,6 @@ L_\nu=4\pi^2R_{\rm BB}^2B_\nu(T_{\rm BB}) .
 R_*=R_{\rm hom}\quad(\mathrm{Uniform}),\qquad
 R_*=R_{\rm try}\quad(\mathrm{BPL/Ia}).
 ```
-
-完全光学薄后自然有 $R_{\rm try}=R_{\rm direct}$ ；判断逐时刻进行，低温阶段
-由完整 `Lbol` 反算地板半径，不提供额外星云 SED 分量。
 
 ### API 调用
 

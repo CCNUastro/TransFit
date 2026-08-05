@@ -63,22 +63,12 @@ Here, $a(t)$ is the homologous expansion factor after shock exit.
 
 ### Nickel density and photosphere
 
-At explosion the ejecta already occupy the progenitor radius $R_\star=R_0$;
-they do not start from zero radius. Define the dimensionless homologous
-expansion factor
+The Nickel ejecta start at the progenitor radius `R_0` and expand homologously:
 
 ```math
-a(t)=\frac{R_{\rm out}(t)}{R_\star}
-=1+\frac{v_{\max}t}{R_\star},\qquad
-R_{\rm out}(t)=R_\star+v_{\max}t .
-```
-
-The initial Lagrangian radius and current radius of the shell labelled by $v$
-are
-
-```math
-r_\star(v)=R_\star\frac{v}{v_{\max}},\qquad
-r(v,t)=a(t)r_\star(v)=R_{\rm out}(t)\frac{v}{v_{\max}} .
+R_{\rm out}(t)=R_0+v_{\max}t,
+\qquad
+\rho(v,t)=\rho(v,0)\left(\frac{R_0}{R_{\rm out}(t)}\right)^3 .
 ```
 
 The model uses the following three physical density structures. Uniform is
@@ -107,47 +97,23 @@ The Ia/exponential profile is
 \qquad 0\le v\le v_{\max}.
 ```
 
-The BPL profile is truncated at $v_{\max}=3v_t$, while the Ia/exponential
-profile is truncated at $v_{\max}=12v_e$. The three density normalizations
-decline with homologous expansion as
-
-```math
-\rho_{\rm u}(t)\propto a(t)^{-3},\qquad
-\rho_t(t)\propto a(t)^{-3},\qquad
-\rho_e(t)\propto a(t)^{-3}.
-```
-
-Their normalization and $v_{\max}$ are fixed jointly by the ejecta mass and
-kinetic energy:
-
-```math
-M_{\rm ej}=4\pi\left(\frac{R_{\rm out}}{v_{\max}}\right)^3
-\int_0^{v_{\max}}\rho(v,t)v^2\,dv,
-\qquad
-E_K=2\pi\left(\frac{R_{\rm out}}{v_{\max}}\right)^3
-\int_0^{v_{\max}}\rho(v,t)v^4\,dv
-=\frac{1}{2}M_{\rm ej}v_{\rm ej}^2 .
-```
-
-Thus the input $v_{\rm ej}$ is the characteristic velocity defined by the
-total kinetic energy, not a common fixed outer-edge velocity for every density
-profile. The outward optical depth follows directly from the physical density:
+The BPL profile is truncated at `v_max=3 v_t`, while the Ia/exponential profile
+is truncated at `v_max=12 v_e`. The outward optical depth is obtained directly
+from the physical density:
 
 ```math
 \tau(v,t)=\int_{r(v,t)}^{R_{\rm out}(t)}\kappa\rho(r',t)\,dr'
-=\kappa\frac{R_{\rm out}(t)}{v_{\max}}
-\int_v^{v_{\max}}\rho(v',t)\,dv' .
 ```
 
-The density profile automatically selects the radiation boundary. Uniform
-density preserves the historical outer-boundary diffusion luminosity:
+The density profile automatically selects the radiation boundary. Uniform uses
+the outer-boundary diffusion luminosity, while BPL/Ia use the physical
+photosphere and direct escape outside it:
 
 ```math
-L_{\rm bol}=L_{\rm out},\qquad L_{\rm direct}=0.
+L_{\rm bol}=L_{\rm out}\quad(\mathrm{Uniform}),\qquad
+L_{\rm bol}=L_{\rm photospheric}+L_{\rm direct}
+\quad(\mathrm{BPL/Ia}).
 ```
-
-This historical path keeps the original gamma treatment: the Ni term is fully
-trapped and leakage is applied only to the Co term.
 
 For BPL and Ia/exponential density, the physical photosphere satisfies
 
@@ -155,19 +121,13 @@ For BPL and Ia/exponential density, the physical photosphere satisfies
 \tau(v_{\rm ph},t)=\frac{2}{3}
 ```
 
-Deposited power inside the photosphere enters diffusion, while deposited power
-outside escapes directly. Therefore
+The photospheric radius and temperature are
 
 ```math
-L_{\rm bol}=L_{\rm photospheric}+L_{\rm direct},\qquad
 R_{\rm ph}=R_{\rm out}\frac{v_{\rm ph}}{v_{\max}},\qquad
 T_{\rm ph}=\left(\frac{L_{\rm photospheric}}
 {4\pi\sigma R_{\rm ph}^2}\right)^{1/4} .
 ```
-
-For BPL and Ia/exponential, once the total optical depth is below $2/3$,
-`photosphere_valid=False`, `Lphotospheric=0`, `Lbol=Ldirect`, and the physical
-`Rph/Teff` values are `NaN`.
 
 ### Nickel multi-band emission
 
@@ -221,10 +181,6 @@ The emitting radius is
 R_*=R_{\rm hom}\quad(\mathrm{Uniform}),\qquad
 R_*=R_{\rm try}\quad(\mathrm{BPL/Ia}).
 ```
-
-Once fully thin, $R_{\rm try}=R_{\rm direct}$ naturally. Cool epochs use a floor
-radius normalized to the complete `Lbol`; there is no additional nebular SED
-component.
 
 ### API calls
 
