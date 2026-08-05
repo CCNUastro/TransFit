@@ -97,10 +97,17 @@ The Ia/exponential profile is
 ```
 
 The BPL profile is truncated at $v_{\max}=3v_t$, while the Ia/exponential
-profile is truncated at $v_{\max}=12v_e$. The amplitudes
-$\rho_{\rm u}(t)$, $\rho_t(t)$, and $\rho_e(t)$ all decline as
-$t_{\rm h}^{-3}$. Their normalization and $v_{\max}$ are fixed jointly by the
-ejecta mass and kinetic energy:
+profile is truncated at $v_{\max}=12v_e$. The three density normalizations
+decline with homologous expansion as
+
+```math
+\rho_{\rm u}(t)\propto t_{\rm h}^{-3},\qquad
+\rho_t(t)\propto t_{\rm h}^{-3},\qquad
+\rho_e(t)\propto t_{\rm h}^{-3}.
+```
+
+Their normalization and $v_{\max}$ are fixed jointly by the ejecta mass and
+kinetic energy:
 
 ```math
 M_{\rm ej}=4\pi t_{\rm h}^{3}
@@ -196,10 +203,16 @@ The corresponding blackbody spectrum is
 L_\nu=4\pi^2R_{\rm BB}^2B_\nu(T_{\rm BB}) .
 ```
 
-Here $R_*=R_{\rm hom}$ for Uniform density and $R_*=R_{\rm try}$ for BPL and
-Ia/exponential. Once fully thin, $R_{\rm try}=R_{\rm direct}$ naturally. Cool
-epochs use a floor radius normalized to the complete `Lbol`; there is no
-additional nebular SED component.
+The emitting radius is
+
+```math
+R_*=R_{\rm hom}\quad(\mathrm{Uniform}),\qquad
+R_*=R_{\rm try}\quad(\mathrm{BPL/Ia}).
+```
+
+Once fully thin, $R_{\rm try}=R_{\rm direct}$ naturally. Cool epochs use a floor
+radius normalized to the complete `Lbol`; there is no additional nebular SED
+component.
 
 ### API calls
 

@@ -92,9 +92,15 @@ Ia/exponential 为
 ```
 
 BPL 在 $v_{\max}=3v_t$ 处截断，Ia/exponential 在
-$v_{\max}=12v_e$ 处截断。$\rho_{\rm u}(t)$、$\rho_t(t)$、$\rho_e(t)$
-均随同模膨胀按 $t_{\rm h}^{-3}$ 下降。密度归一化和 $v_{\max}$ 由抛射物
-质量与动能共同确定：
+$v_{\max}=12v_e$ 处截断。三种密度的归一化因子均随同模膨胀按下式下降：
+
+```math
+\rho_{\rm u}(t)\propto t_{\rm h}^{-3},\qquad
+\rho_t(t)\propto t_{\rm h}^{-3},\qquad
+\rho_e(t)\propto t_{\rm h}^{-3}.
+```
+
+密度归一化和 $v_{\max}$ 由抛射物质量与动能共同确定：
 
 ```math
 M_{\rm ej}=4\pi t_{\rm h}^{3}
@@ -184,9 +190,15 @@ R_{\rm BB}=\sqrt{\frac{L_{\rm bol}}
 L_\nu=4\pi^2R_{\rm BB}^2B_\nu(T_{\rm BB}) .
 ```
 
-其中 Uniform 取 $R_*=R_{\rm hom}$，BPL 和 Ia/exponential 取
-$R_*=R_{\rm try}$。完全光学薄后自然有 $R_{\rm try}=R_{\rm direct}$；判断逐
-时刻进行，低温阶段由完整 `Lbol` 反算地板半径，不提供额外星云 SED 分量。
+其中
+
+```math
+R_*=R_{\rm hom}\quad(\mathrm{Uniform}),\qquad
+R_*=R_{\rm try}\quad(\mathrm{BPL/Ia}).
+```
+
+完全光学薄后自然有 $R_{\rm try}=R_{\rm direct}$ ；判断逐时刻进行，低温阶段
+由完整 `Lbol` 反算地板半径，不提供额外星云 SED 分量。
 
 ### API 调用
 
