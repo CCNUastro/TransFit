@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB">
+  <img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB">
   <img alt="License" src="https://img.shields.io/badge/License-GPL--3.0-blue">
   <img alt="Inference" src="https://img.shields.io/badge/Inference-MCMC-C0392B">
   <img alt="Models" src="https://img.shields.io/badge/Models-Transient%20Light%20Curves-1F4E79">
@@ -21,8 +21,7 @@ transient light curves. It provides a compact interface for bolometric and
 multi-band data, with built-in nickel, magnetar, magnetar-plus-nickel, and CSM
 interaction models.
 
-**Latest updates:** [Changelog](docs/changelog.md) ·
-[中文更新日志](docs/changelog_chinese.md)
+**Latest updates:** [Changelog](https://github.com/CCNUastro/TransFit/blob/main/docs/changelog.md)
 
 ## Features
 
@@ -34,6 +33,8 @@ interaction models.
   by default and optional `zeus` and `dynesty` backends.
 
 ## Installation
+
+TransFit requires Python 3.11 or later and NumPy 2.4.6 or later.
 
 ```bash
 python -m pip install transfit
@@ -484,7 +485,7 @@ Parts of the code and documentation in this project were generated with
 assistance from OpenAI Codex.
 
 <p align="center">
-  <img src="docs/assets/logos/ccnu-logo.jpeg" height="120" alt="Central China Normal University logo">
+  <img src="docs/assets/logos/ccnu-logo.jpeg" height="150" alt="Central China Normal University logo">
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="docs/assets/logos/ccnu-astronomy-logo.png" height="120" alt="CCNU Institute of Astrophysics logo">
+  <img src="docs/assets/logos/ccnu-astronomy-logo.png" height="150" alt="CCNU Institute of Astrophysics logo">
 </p>

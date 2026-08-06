@@ -1,7 +1,7 @@
 # TransFit
 
 <p align="right">
-  <strong>语言：</strong><a href="../README.md">English</a> | 简体中文
+  <strong>Language:</strong> <a href="../README.md">English</a> | 简体中文
 </p>
 
 <p align="center">
@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB">
+  <img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB">
   <img alt="License" src="https://img.shields.io/badge/License-GPL--3.0-blue">
   <img alt="Inference" src="https://img.shields.io/badge/Inference-MCMC-C0392B">
   <img alt="Models" src="https://img.shields.io/badge/Models-Transient%20Light%20Curves-1F4E79">
@@ -28,6 +28,8 @@ bolometric 和多波段数据接口，并内置 nickel、magnetar、magnetar-plu
   `dynesty`。
 
 ## 安装
+
+TransFit 需要 Python 3.11 或更高版本，以及 NumPy 2.4.6 或更高版本。
 
 ```bash
 python -m pip install transfit

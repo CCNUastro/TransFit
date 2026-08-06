@@ -1,5 +1,9 @@
 # TransFit API 和参数参考
 
+<p align="right">
+  <strong>Language:</strong> <a href="api_reference.md">English</a> | 简体中文
+</p>
+
 本文档说明 TransFit 稳定公开 Python 接口。README 和 tutorial 只展示最小用法；
 API 参数含义、模型参数、结果字段和高级选项统一放在这里。
 

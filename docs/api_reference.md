@@ -1,11 +1,13 @@
 # TransFit API and Parameter Reference
 
+<p align="right">
+  <strong>Language:</strong> English | <a href="api_reference_chinese.md">简体中文</a>
+</p>
+
 This document describes the stable public Python interface of TransFit. The
 README and tutorial intentionally show only minimal examples; this file is the
 place for argument meanings, model parameters, result fields, and advanced
 options.
-
-Chinese version: [中文 API 和参数参考](api_reference_chinese.md).
 
 All public time inputs and outputs use **observer-frame days**. The physical
 models are solved internally in rest-frame time and converted back to the

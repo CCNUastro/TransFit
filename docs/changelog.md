@@ -1,8 +1,10 @@
 # TransFit Changelog
 
-User-visible changes are recorded here, with the newest version first.
+<p align="right">
+  <strong>Language:</strong> English | <a href="changelog_chinese.md">简体中文</a>
+</p>
 
-[中文版本](changelog_chinese.md)
+User-visible changes are recorded here, with the newest version first.
 
 ## v0.2
 

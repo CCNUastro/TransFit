@@ -1,8 +1,10 @@
 # TransFit 更新日志
 
-这里长期记录面向用户的更新，最新版本写在最前面。
+<p align="right">
+  <strong>Language:</strong> <a href="changelog.md">English</a> | 简体中文
+</p>
 
-[English version](changelog.md)
+这里长期记录面向用户的更新，最新版本写在最前面。
 
 ## v0.2
 

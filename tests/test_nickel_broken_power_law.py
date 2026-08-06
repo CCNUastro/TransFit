@@ -146,7 +146,7 @@ def test_q_profile_moments_match_direct_quadrature(order, density_profile):
         10.0,
     )
     q = np.linspace(_PROFILE_Q_MIN, _PROFILE_Q_MAX, 500_001)
-    numerical = np.trapz(q**order * _eta_q(q, density_profile, 0.0, 10.0), q)
+    numerical = np.trapezoid(q**order * _eta_q(q, density_profile, 0.0, 10.0), q)
     assert expected == pytest.approx(numerical, rel=3.0e-8)
 
 
