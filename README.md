@@ -21,6 +21,9 @@ transient light curves. It provides a compact interface for bolometric and
 multi-band data, with built-in nickel, magnetar, magnetar-plus-nickel, and CSM
 interaction models.
 
+**Latest updates:** [Changelog](docs/changelog.md) ·
+[中文更新日志](docs/changelog_chinese.md)
+
 ## Features
 
 - Physical light-curve models with bolometric luminosity, effective
@@ -407,7 +410,6 @@ Full details are available in [API and parameter reference](docs/api_reference.m
 
 - [Tutorial notebook](examples/tutorial.ipynb)
 - [API and parameter reference](docs/api_reference.md)
-- [Changelog](docs/changelog.md)
 
 ## Contact
 
@@ -480,3 +482,9 @@ archivePrefix = {arXiv},
 
 Parts of the code and documentation in this project were generated with
 assistance from OpenAI Codex.
+
+<p align="center">
+  <img src="docs/assets/logos/ccnu-logo.jpeg" height="120" alt="Central China Normal University logo">
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="docs/assets/logos/ccnu-astronomy-logo.png" height="120" alt="CCNU Institute of Astrophysics logo">
+</p>
