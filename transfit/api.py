@@ -9,12 +9,22 @@ import numpy as np
 
 from .data import BolometricData, MultiBandData
 from .exceptions import NonPhysicalModelError
-from .modules.extinction import ExtinctionSpec, normalize_extinction, validate_extinction_spec
+from .modules.extinction import (
+    ExtinctionSpec,
+    apply_extinction_to_fnu_grid,
+    normalize_extinction,
+    validate_extinction_spec,
+)
 from .modules.filters import FilterProfile, normalize_filters, validate_filter_map
+from .modules.fnu import evaluate_multiband_model_fnu
 from .modules.interp import interp_fit
 from .modules.labels import normalize_band_label
 from .modules.likelihood import gaussian_lnlike_with_nuisance
-from .modules.photometry import evaluate_multiband_observer_output, validate_observation_mode
+from .modules.photometry import (
+    evaluate_multiband_observer_output,
+    fnu_grid_to_observation_output,
+    validate_observation_mode,
+)
 from .modules.sed import BlackbodySED, sed_to_dict
 from .model_registry import canonical_model_name, forward_param_defaults
 from .samplers import FitResult, run_emcee, run_zeus, run_dynesty
@@ -671,50 +681,144 @@ def _validate_solved_state(Lbol, Teff, Rph, photosphere_valid=None) -> None:
         )
 
 
-def _nickel_photospheric_blackbody(transport, T_floor: float):
-    """Map Nickel Lbol to a photosphere plus direct-emission effective area.
+def _nickel_two_component_blackbody(transport, T_floor: float):
+    """Return diluted photospheric and optically thin blackbody components.
 
-    ``Ldirect`` is converted to an equivalent emitting area at ``T_floor`` and
-    added to the physical tau=2/3 photospheric area. The complete ``Lbol`` then
-    sets the trial temperature on that combined area. This prevents optically
-    thin power from being compressed onto a vanishing physical photosphere.
+    The physical photosphere uses ``Lphotospheric`` and ``Rph``.  When its
+    effective temperature falls below ``T_floor``, the color temperature is
+    fixed at the floor and the blackbody area is diluted so its frequency
+    integral remains exactly ``Lphotospheric``.  ``Ldirect`` is normalized as
+    a separate floor-temperature continuum.  The two components therefore
+    integrate to ``Lbol`` without assigning optically thin power to ``Rph``.
     """
     floor = float(T_floor)
     if not np.isfinite(floor) or floor <= 0.0:
         raise ValueError("T_floor must be finite and > 0 for photospheric emission.")
     luminosity = np.asarray(transport.Lbol, float)
+    photospheric_luminosity = np.asarray(transport.Lphotospheric, float)
     direct_luminosity = np.asarray(transport.Ldirect, float)
     radius_physical = np.asarray(transport.Rph, float)
     photosphere_valid = np.asarray(transport.photosphere_valid, bool)
     if not (
         luminosity.shape
+        == photospheric_luminosity.shape
         == direct_luminosity.shape
         == radius_physical.shape
         == photosphere_valid.shape
     ):
         raise _NonPhysicalModelOutput(
-            "Nickel Lbol, Ldirect, Rph, and photosphere_valid must have the same shape."
+            "Nickel Lbol, Lphotospheric, Ldirect, Rph, and photosphere_valid "
+            "must have the same shape."
+        )
+    if (
+        np.any(~np.isfinite(photospheric_luminosity))
+        or np.any(photospheric_luminosity < 0.0)
+        or np.any(~np.isfinite(direct_luminosity))
+        or np.any(direct_luminosity < 0.0)
+    ):
+        raise _NonPhysicalModelOutput(
+            "Nickel Lphotospheric and Ldirect must be finite and non-negative."
+        )
+    if not np.allclose(
+        luminosity,
+        photospheric_luminosity + direct_luminosity,
+        rtol=5.0e-12,
+        atol=0.0,
+    ):
+        raise _NonPhysicalModelOutput(
+            "Nickel transport must satisfy Lbol=Lphotospheric+Ldirect."
         )
 
+    photo_active = photosphere_valid & (photospheric_luminosity > 0.0)
+    invalid_photo_radius = ~np.isfinite(radius_physical) | (radius_physical <= 0.0)
+    if np.any(photo_active & invalid_photo_radius):
+        raise _NonPhysicalModelOutput(
+            "A luminous Nickel photospheric component requires finite positive Rph."
+        )
+
+    temperature_photo = np.full(luminosity.shape, floor, dtype=float)
+    radius_photo = np.zeros(luminosity.shape, dtype=float)
+    if np.any(photo_active):
+        temperature_effective = (
+            photospheric_luminosity[photo_active]
+            / (4.0 * PI * SIGMA_SB * radius_physical[photo_active] ** 2)
+        ) ** 0.25
+        temperature_photo[photo_active] = np.maximum(temperature_effective, floor)
+        # This effective area is Rph**2 times the usual dilution factor
+        # (T_eff/T_color)**4.  Above the floor it is exactly the physical Rph.
+        radius_photo[photo_active] = np.sqrt(
+            photospheric_luminosity[photo_active]
+            / (4.0 * PI * SIGMA_SB * temperature_photo[photo_active] ** 4)
+        )
+
+    temperature_direct = np.full(luminosity.shape, floor, dtype=float)
     radius_direct = np.sqrt(
-        np.maximum(direct_luminosity, 0.0)
-        / (4.0 * PI * SIGMA_SB * floor**4)
+        direct_luminosity / (4.0 * PI * SIGMA_SB * floor**4)
     )
-    radius_try = np.sqrt(
-        np.where(photosphere_valid, radius_physical**2, 0.0)
-        + radius_direct**2
+    return temperature_photo, radius_photo, temperature_direct, radius_direct
+
+
+def _evaluate_nickel_two_component_multiband(
+    *,
+    transport,
+    T_floor: float,
+    sed,
+    filter_map,
+    bands,
+    DL_cm: float,
+    z: float,
+    y_kind: str,
+    mag_system: str,
+    extinction,
+):
+    """Add Nickel photospheric and direct continua in F_nu space."""
+    if type(sed) is not BlackbodySED:
+        raise ValueError(
+            "BPL/Ia Nickel two-component emission currently requires the "
+            "standard BlackbodySED."
+        )
+    (
+        temperature_photo,
+        radius_photo,
+        temperature_direct,
+        radius_direct,
+    ) = _nickel_two_component_blackbody(transport, T_floor)
+
+    photo_fnu = evaluate_multiband_model_fnu(
+        sed=sed,
+        filter_map=filter_map,
+        bands=bands,
+        Teff_K=temperature_photo,
+        R_cm=radius_photo,
+        DL_cm=DL_cm,
+        z=z,
     )
-    temperature_try = (
-        luminosity
-        / (4.0 * PI * SIGMA_SB * radius_try**2)
-    ) ** 0.25
-    use_combined_area = photosphere_valid & (temperature_try > floor)
-    temperature = np.where(use_combined_area, temperature_try, floor)
-    radius_floor = np.sqrt(
-        luminosity / (4.0 * PI * SIGMA_SB * floor**4)
+    direct_fnu = evaluate_multiband_model_fnu(
+        sed=sed,
+        filter_map=filter_map,
+        bands=bands,
+        Teff_K=temperature_direct,
+        R_cm=radius_direct,
+        DL_cm=DL_cm,
+        z=z,
     )
-    radius = np.where(use_combined_area, radius_try, radius_floor)
-    return temperature, radius
+    photo_fnu[:, radius_photo <= 0.0] = 0.0
+    direct_fnu[:, radius_direct <= 0.0] = 0.0
+    total_fnu = photo_fnu + direct_fnu
+    total_fnu = apply_extinction_to_fnu_grid(
+        total_fnu,
+        filter_map=filter_map,
+        bands=bands,
+        extinction=extinction,
+        z=z,
+    )
+    return fnu_grid_to_observation_output(
+        total_fnu,
+        filter_map=filter_map,
+        bands=bands,
+        y_kind=y_kind,
+        mag_system=mag_system,
+    )
 
 
 def _evaluate_multiband_solved_state(
@@ -733,7 +837,7 @@ def _evaluate_multiband_solved_state(
     mag_system: str,
     extinction,
 ):
-    """Apply the density-selected Nickel SED mapping to a solved state."""
+    """Apply the density-selected SED mapping to a solved state."""
     if model == "nickel":
         if transport is None:
             raise _NonPhysicalModelOutput("Nickel transport state is unavailable.")
@@ -744,9 +848,17 @@ def _evaluate_multiband_solved_state(
             radius = np.asarray(transport.Rph, float)
         else:
             values = _model_values_from_vector(model, model_vector)
-            temperature, radius = _nickel_photospheric_blackbody(
-                transport,
-                values["T_floor"],
+            return _evaluate_nickel_two_component_multiband(
+                transport=transport,
+                T_floor=values["T_floor"],
+                sed=sed,
+                filter_map=filter_map,
+                bands=bands,
+                DL_cm=DL_cm,
+                z=z,
+                y_kind=y_kind,
+                mag_system=mag_system,
+                extinction=extinction,
             )
     else:
         temperature = np.asarray(Teff, float)

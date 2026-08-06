@@ -1818,60 +1818,76 @@ def test_nickel_multiband_uses_the_bolometric_transport_grid():
     np.testing.assert_allclose(curve.t_days, bolometric.t_days, rtol=0.0, atol=0.0)
 
 
-def test_nickel_photospheric_blackbody_is_reversible_and_uses_floor_when_thin():
+def test_nickel_two_component_blackbody_is_bolometrically_reversible():
     floor = 4500.0
     physical_radius = np.array([1.0e14, 2.0e14, 1.5e14, 1.2e14, np.nan])
     trial_temperature = np.array([8000.0, 3000.0, 7000.0, 9000.0, np.nan])
-    luminosity = np.array([
+    photospheric_luminosity = np.array([
         4.0 * PI * SIGMA_SB * physical_radius[0] ** 2 * trial_temperature[0] ** 4,
         4.0 * PI * SIGMA_SB * physical_radius[1] ** 2 * trial_temperature[1] ** 4,
         4.0 * PI * SIGMA_SB * physical_radius[2] ** 2 * trial_temperature[2] ** 4,
         4.0 * PI * SIGMA_SB * physical_radius[3] ** 2 * trial_temperature[3] ** 4,
-        1.0e41,
+        0.0,
     ])
+    direct_luminosity = np.array([0.0, 0.0, 2.0e41, 0.0, 1.0e41])
     transport = SimpleNamespace(
-        Lbol=luminosity,
-        Ldirect=np.array([0.0, 0.0, 0.0, 0.0, luminosity[-1]]),
+        Lbol=photospheric_luminosity + direct_luminosity,
+        Lphotospheric=photospheric_luminosity,
+        Ldirect=direct_luminosity,
         Rph=physical_radius,
         photosphere_valid=np.array([True, True, True, True, False]),
     )
 
-    temperature, radius = api._nickel_photospheric_blackbody(transport, floor)
-    expected_floor_radius = np.sqrt(
-        luminosity / (4.0 * PI * SIGMA_SB * floor**4)
+    (
+        temperature_photo,
+        radius_photo,
+        temperature_direct,
+        radius_direct,
+    ) = api._nickel_two_component_blackbody(transport, floor)
+    expected_photo_radius = np.sqrt(
+        photospheric_luminosity / (4.0 * PI * SIGMA_SB * np.array([
+            8000.0, floor, 7000.0, 9000.0, floor,
+        ]) ** 4)
+    )
+    expected_direct_radius = np.sqrt(
+        direct_luminosity / (4.0 * PI * SIGMA_SB * floor**4)
     )
 
     np.testing.assert_allclose(
-        temperature,
+        temperature_photo,
         [8000.0, floor, 7000.0, 9000.0, floor],
     )
+    np.testing.assert_allclose(temperature_direct, floor)
+    np.testing.assert_allclose(radius_photo, expected_photo_radius)
+    np.testing.assert_allclose(radius_direct, expected_direct_radius)
     np.testing.assert_allclose(
-        radius,
-        [
-            physical_radius[0],
-            expected_floor_radius[1],
-            physical_radius[2],
-            physical_radius[3],
-            expected_floor_radius[4],
-        ],
+        4.0 * PI * SIGMA_SB * radius_photo**2 * temperature_photo**4,
+        photospheric_luminosity,
+        rtol=2.0e-15,
+        atol=0.0,
     )
     np.testing.assert_allclose(
-        4.0 * PI * SIGMA_SB * radius**2 * temperature**4,
-        luminosity,
+        4.0 * PI * SIGMA_SB * radius_direct**2 * temperature_direct**4,
+        direct_luminosity,
         rtol=2.0e-15,
         atol=0.0,
     )
 
     direct_dominated = SimpleNamespace(
         Lbol=np.array([1.0e43]),
+        Lphotospheric=np.array([0.0]),
         Ldirect=np.array([1.0e43]),
         Rph=np.array([1.0e16]),
         photosphere_valid=np.array([True]),
     )
-    direct_temperature, direct_radius = api._nickel_photospheric_blackbody(
-        direct_dominated,
-        floor,
+    photo_temperature, photo_radius, direct_temperature, direct_radius = (
+        api._nickel_two_component_blackbody(
+            direct_dominated,
+            floor,
+        )
     )
+    np.testing.assert_allclose(photo_temperature, [floor])
+    np.testing.assert_allclose(photo_radius, [0.0])
     np.testing.assert_allclose(direct_temperature, [floor])
     np.testing.assert_allclose(
         direct_radius,
@@ -1879,7 +1895,94 @@ def test_nickel_photospheric_blackbody_is_reversible_and_uses_floor_when_thin():
     )
 
 
-def test_nickel_photospheric_floor_allows_delayed_radioactive_reheating():
+def test_nickel_two_component_multiband_adds_flux_before_extinction():
+    floor = 4500.0
+    physical_radius = np.array([2.0e14, np.nan])
+    photospheric_luminosity = np.array([
+        4.0 * PI * SIGMA_SB * physical_radius[0] ** 2 * 7000.0**4,
+        0.0,
+    ])
+    direct_luminosity = np.array([2.0e41, 1.0e41])
+    transport = SimpleNamespace(
+        Lbol=photospheric_luminosity + direct_luminosity,
+        Lphotospheric=photospheric_luminosity,
+        Ldirect=direct_luminosity,
+        Rph=physical_radius,
+        photosphere_valid=np.array([True, False]),
+    )
+    filters = normalize_filters({
+        "B": "johnson_cousins.B",
+        "I": "johnson_cousins.I",
+    })
+    bands = ["B", "I"]
+    extinction = normalize_extinction({
+        "mw": {"ebv": 0.04, "rv": 3.1, "law": "ccm89"},
+    })
+    sed = BlackbodySED()
+    (
+        temperature_photo,
+        radius_photo,
+        temperature_direct,
+        radius_direct,
+    ) = api._nickel_two_component_blackbody(transport, floor)
+    photo_fnu = evaluate_multiband_model_fnu(
+        sed=sed,
+        filter_map=filters,
+        bands=bands,
+        Teff_K=temperature_photo,
+        R_cm=radius_photo,
+        DL_cm=10.0 * PC,
+        z=0.0,
+    )
+    direct_fnu = evaluate_multiband_model_fnu(
+        sed=sed,
+        filter_map=filters,
+        bands=bands,
+        Teff_K=temperature_direct,
+        R_cm=radius_direct,
+        DL_cm=10.0 * PC,
+        z=0.0,
+    )
+    photo_fnu[:, radius_photo <= 0.0] = 0.0
+    direct_fnu[:, radius_direct <= 0.0] = 0.0
+    expected = apply_extinction_to_fnu_grid(
+        photo_fnu + direct_fnu,
+        filter_map=filters,
+        bands=bands,
+        extinction=extinction,
+        z=0.0,
+    )
+
+    actual = api._evaluate_nickel_two_component_multiband(
+        transport=transport,
+        T_floor=floor,
+        sed=sed,
+        filter_map=filters,
+        bands=bands,
+        DL_cm=10.0 * PC,
+        z=0.0,
+        y_kind="flux",
+        mag_system="ab",
+        extinction=extinction,
+    )
+
+    np.testing.assert_allclose(actual, expected, rtol=0.0, atol=0.0)
+    with pytest.raises(ValueError, match="standard BlackbodySED"):
+        api._evaluate_nickel_two_component_multiband(
+            transport=transport,
+            T_floor=floor,
+            sed=CutoffBlackbodySED(),
+            filter_map=filters,
+            bands=bands,
+            DL_cm=10.0 * PC,
+            z=0.0,
+            y_kind="flux",
+            mag_system="ab",
+            extinction=extinction,
+        )
+
+
+def test_nickel_photospheric_color_floor_allows_delayed_radioactive_reheating():
     floor = 4500.0
     ejecta_mass = 3.0
     velocity = np.sqrt(2.0e51 / (ejecta_mass * M_SUN)) / 1.0e9
@@ -1902,7 +2005,7 @@ def test_nickel_photospheric_floor_allows_delayed_radioactive_reheating():
         t_max_days=35.0,
         density_profile="broken_power_law",
     )
-    temperature, _ = api._nickel_photospheric_blackbody(state, floor)
+    temperature, _, _, _ = api._nickel_two_component_blackbody(state, floor)
     time_days = state.t_s / 86400.0
 
     def temperature_near(day):
@@ -1914,7 +2017,7 @@ def test_nickel_photospheric_floor_allows_delayed_radioactive_reheating():
     assert temperature_near(30.0) == pytest.approx(floor)
 
 
-def test_direct_equivalent_area_prevents_bpl_terminal_temperature_spike():
+def test_two_component_mapping_prevents_bpl_terminal_temperature_spike():
     floor = 4500.0
     ejecta_mass = 1.0
     velocity = np.sqrt(2.0e51 / (ejecta_mass * M_SUN)) / 1.0e9
@@ -1937,20 +2040,86 @@ def test_direct_equivalent_area_prevents_bpl_terminal_temperature_spike():
         t_max_days=100.0,
         density_profile="broken_power_law",
     )
-    temperature, radius = api._nickel_photospheric_blackbody(state, floor)
+    temperature_photo, radius_photo, temperature_direct, radius_direct = (
+        api._nickel_two_component_blackbody(state, floor)
+    )
     valid = state.photosphere_valid
     last_valid = int(np.flatnonzero(valid)[-1])
-    first_floor = int(np.flatnonzero(temperature == floor)[0])
 
     assert state.Ldirect[last_valid] / state.Lbol[last_valid] > 0.99999
-    assert temperature[last_valid] == pytest.approx(floor)
-    assert np.all(temperature[first_floor:] == floor)
+    assert temperature_photo[last_valid] == pytest.approx(floor)
+    assert temperature_direct[last_valid] == pytest.approx(floor)
+    assert np.all(radius_photo[~valid] == 0.0)
     np.testing.assert_allclose(
-        4.0 * PI * SIGMA_SB * radius**2 * temperature**4,
-        state.Lbol,
+        4.0 * PI * SIGMA_SB * radius_photo**2 * temperature_photo**4,
+        state.Lphotospheric,
         rtol=2.0e-15,
         atol=0.0,
     )
+    np.testing.assert_allclose(
+        4.0 * PI * SIGMA_SB * radius_direct**2 * temperature_direct**4,
+        state.Ldirect,
+        rtol=2.0e-15,
+        atol=0.0,
+    )
+
+
+def test_extreme_bpl_multiband_is_continuous_when_photosphere_disappears():
+    params = {
+        "M_ej": 0.1817135648945924,
+        "v_ej": 2.064495754918176,
+        "E_Th_in": 2.955995089352911,
+        "M_ni": 0.010578036619697624,
+        "R_0": 3.7172166830959092,
+        "f_ni": 0.1533546623560723,
+        "kappa": 0.01811794432093374,
+        "kappa_gamma": 0.3108539724645572,
+        "T_floor": 4500.0,
+        "delta": 0.0,
+        "n": 10.0,
+    }
+    solver = {"Nx": 100, "Ny": 1000, "density_profile": "bpl"}
+    bolometric = tf.lightcurve_bol(
+        model="nickel",
+        params=params,
+        z=0.0,
+        t_max_days=300.0,
+        solver_kwargs=solver,
+    )
+    multiband = tf.lightcurve_multiband(
+        model="nickel",
+        params=params,
+        z=0.0,
+        distance_modulus=0.0,
+        filters={
+            "B": "johnson_cousins.B",
+            "V": "johnson_cousins.V",
+            "R": "johnson_cousins.R",
+            "I": "johnson_cousins.I",
+        },
+        bands=["B", "V", "R", "I"],
+        y_kind="mag",
+        mag_system="ab",
+        t_max_days=300.0,
+        solver_kwargs=solver,
+    )
+    first_thin = int(np.flatnonzero(~bolometric.photosphere_valid)[0])
+    last_valid = first_thin - 1
+
+    terminal_photo_fraction = (
+        bolometric.Lphotospheric[last_valid] / bolometric.Lbol[last_valid]
+    )
+    assert terminal_photo_fraction < 1.0e-3
+    for band in multiband.bands:
+        values = multiband.y[band]
+        assert np.all(np.isfinite(values))
+        transition_step = abs(float(values[first_thin] - values[last_valid]))
+        neighboring_step = max(
+            abs(float(values[last_valid] - values[last_valid - 1])),
+            abs(float(values[first_thin + 1] - values[first_thin])),
+        )
+        assert transition_step < 0.02
+        assert transition_step < 1.2 * neighboring_step
 
 
 def test_fully_thin_bpl_floor_has_constant_band_flux_per_lbol():

@@ -35,7 +35,7 @@ rest-frame time 中求解，并在 API 边界转换回 observer frame。
 | `f_ni` | Ni 混合区外边界的拉格朗日质量坐标，M(<x_Ni)/M_ej |
 | `kappa` | optical opacity，cm^2 g^-1 |
 | `kappa_gamma` | gamma-ray opacity，cm^2 g^-1 |
-| `T_floor` | Nickel 物理光球多波段黑体的温度地板；默认 4500 K |
+| `T_floor` | Nickel 多波段颜色温度地板；BPL/Ia 中也作为独立 `Ldirect` 连续谱温度；默认 4500 K |
 | `delta` | BPL 内层密度指数，无量纲 |
 | `n` | BPL 外层密度指数，无量纲 |
 
@@ -201,31 +201,32 @@ T_{\rm try}=\left(\frac{L_{\rm bol}}
 {4\pi\sigma R_{\rm hom}^2}\right)^{1/4}.
 \]
 
-BPL 与 Ia/exponential 把 `Ldirect` 换算成地板温度半径，并把它的面积与物理
-光球面积相加：
+BPL 与 Ia/exponential 使用
 
 \[
-R_{\rm direct}=\left(\frac{L_{\rm direct}}
-{4\pi\sigma T_{\rm floor}^4}\right)^{1/2},\qquad
-R_{\rm try}=\left(R_{\rm ph}^2+R_{\rm direct}^2\right)^{1/2},
+T_{\rm eff,ph}=\left(\frac{L_{\rm photospheric}}
+{4\pi\sigma R_{\rm ph}^2}\right)^{1/4},\qquad
+T_{\rm col,ph}=\max(T_{\rm eff,ph},T_{\rm floor}),
 \]
 
 \[
-T_{\rm try}=\left(\frac{L_{\rm bol}}
-{4\pi\sigma R_{\rm try}^2}\right)^{1/4}.
+W_{\rm ph}=\left(\frac{T_{\rm eff,ph}}{T_{\rm col,ph}}\right)^4.
 \]
 
-Uniform 的高温分支使用 `(Rhom,T_try)`；BPL/Ia 使用 `(R_try,T_try)`。
-其余情况使用
+BPL/Ia 的两个黑体连续谱在 flux 空间相加：
 
 \[
-T_{\rm BB}=T_{\rm floor},\qquad
-R_{\rm BB}=\left(\frac{L_{\rm bol}}
-{4\pi\sigma T_{\rm floor}^4}\right)^{1/2}.
+L_\nu^{\rm ph}=4\pi^2R_{\rm ph}^2W_{\rm ph}B_\nu(T_{\rm col,ph}),
 \]
 
-完全光学薄后自然有 `R_try=R_direct`，映射保持在地板温度；不引入单独的星云
-SED 模式。
+\[
+L_\nu^{\rm direct}=L_{\rm direct}
+\frac{\pi B_\nu(T_{\rm floor})}{\sigma T_{\rm floor}^4},\qquad
+L_\nu=L_\nu^{\rm ph}+L_\nu^{\rm direct}.
+\]
+
+两个分量分别恢复各自的 bolometric 光度。完全光学薄后光球项消失，只保留
+光球外连续谱。当前 BPL/Ia 双分量映射只支持标准 `BlackbodySED`。
 
 AB 输出再使用
 

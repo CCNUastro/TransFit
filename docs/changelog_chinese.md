@@ -38,8 +38,9 @@ R_{\mathrm{ph}}(t)=a(t)R_{\mathrm{CSM,out}}
   `exponential`/`ia` 三种密度轮廓。
 - Nickel 根据归一化后的密度名称自动选择辐射策略：Uniform 保留历史外边界
   求解和同模膨胀黑体，BPL/Ia 使用移动 $\tau=2/3$ 光球及光球外直接逃逸。
-- BPL/Ia 多波段把 `Ldirect` 转换为 $T_{\rm floor}$ 下的等效发射面积，再由
-  完整 `Lbol` 归一化黑体，避免把光球外光度压缩到后退的物理光球上。
+- BPL/Ia 多波段在 flux 空间相加由 `Lphotospheric` 归一化的稀释物理光球
+  黑体，以及由 `Ldirect` 归一化的地板温度连续谱，避免把光球外光度压缩到
+  后退的物理光球上。
 - `R_0` 表示前身星半径，也是爆炸时同模膨胀抛射物的初始外半径。
 - `f_ni` 表示 Nickel 混合到的拉格朗日质量坐标；当
   `M_ni > f_ni*M_ej` 时，模型会拒绝该组非物理参数。
@@ -131,47 +132,34 @@ T_{\rm try}=\left(\frac{L_{\rm bol}}
 {4\pi\sigma R_{\rm hom}^2}\right)^{1/4} .
 ```
 
-BPL 和 Ia/exponential 先把 `Ldirect` 换算成地板温度等效半径：
+BPL 和 Ia/exponential 先由物理光球计算有效温度和逐时刻颜色温度：
 
 ```math
-R_{\rm direct}=\left(\frac{L_{\rm direct}}
-{4\pi\sigma T_{\rm floor}^4}\right)^{1/2},\qquad
-R_{\rm try}=\left(R_{\rm ph}^2+R_{\rm direct}^2\right)^{1/2},
+T_{\rm eff,ph}=\left(\frac{L_{\rm photospheric}}
+{4\pi\sigma R_{\rm ph}^2}\right)^{1/4},\qquad
+T_{\rm col,ph}=\max(T_{\rm eff,ph},T_{\rm floor}).
 ```
 
-再由完整 `Lbol` 确定温度：
+光球稀释因子为
 
 ```math
-T_{\rm try}=\left(\frac{L_{\rm bol}}
-{4\pi\sigma R_{\rm try}^2}\right)^{1/4} .
+W_{\rm ph}=\left(\frac{T_{\rm eff,ph}}{T_{\rm col,ph}}\right)^4,
 ```
 
-对于物理光球有效且 $T_{\rm try}>T_{\rm floor}$ 的高温节点，取
+两个连续谱分别为
 
 ```math
-T_{\rm BB}=T_{\rm try},\qquad R_{\rm BB}=R_*.
+L_\nu^{\rm ph}=4\pi^2R_{\rm ph}^2W_{\rm ph}B_\nu(T_{\rm col,ph}),
 ```
-
-其他时刻取
 
 ```math
-T_{\rm BB}=T_{\rm floor},\qquad
-R_{\rm BB}=\sqrt{\frac{L_{\rm bol}}
-{4\pi\sigma T_{\rm floor}^4}}.
+L_\nu^{\rm direct}=L_{\rm direct}
+\frac{\pi B_\nu(T_{\rm floor})}{\sigma T_{\rm floor}^4},\qquad
+L_\nu=L_\nu^{\rm ph}+L_\nu^{\rm direct}.
 ```
 
-相应黑体频谱为
-
-```math
-L_\nu=4\pi^2R_{\rm BB}^2B_\nu(T_{\rm BB}) .
-```
-
-其中
-
-```math
-R_*=R_{\rm hom}\quad(\mathrm{Uniform}),\qquad
-R_*=R_{\rm try}\quad(\mathrm{BPL/Ia}).
-```
+两个分量分别恢复各自的 bolometric 光度，其和严格恢复 `Lbol`。完全光学薄后
+光球分量为零，只保留光球外连续谱。
 
 ### API 调用
 

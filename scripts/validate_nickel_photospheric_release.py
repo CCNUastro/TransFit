@@ -14,7 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import transfit as tf
-from transfit.api import _nickel_photospheric_blackbody
+from transfit.api import _nickel_two_component_blackbody
 from transfit.constants import (
     DAY,
     EPSILON_CO,
@@ -60,8 +60,8 @@ THRESHOLDS = {
     "component_closure": 1.0e-13,
     "stefan_boltzmann": 1.0e-12,
     "photosphere_tau": 1.0e-5,
-    "multiband_stefan_boltzmann": 1.0e-12,
-    "multiband_combined_radius": 1.0e-12,
+    "multiband_component_closure": 1.0e-12,
+    "multiband_hot_photosphere_radius": 1.0e-12,
     "thin_heating": 1.0e-11,
     "spatial_convergence_after_5d": 5.0e-3,
     "temporal_convergence_after_10d": 5.0e-3,
@@ -267,40 +267,52 @@ def _transport_metrics(profile: str) -> dict:
     assert np.all(np.isnan(state.Rph[thin]))
     assert np.all(np.isnan(state.Tph[thin]))
 
-    sed_temperature, sed_radius = _nickel_photospheric_blackbody(
+    (
+        photo_temperature,
+        photo_radius,
+        direct_temperature,
+        direct_radius,
+    ) = _nickel_two_component_blackbody(
         state,
         PARAMS["T_floor"],
     )
-    sed_luminosity = (
-        4.0 * PI * SIGMA_SB * sed_radius**2 * sed_temperature**4
+    photo_sed_luminosity = (
+        4.0 * PI * SIGMA_SB * photo_radius**2 * photo_temperature**4
     )
-    multiband_sb_error = _max_relative(sed_luminosity, state.Lbol)
-    direct_radius = np.sqrt(
-        state.Ldirect
-        / (4.0 * PI * SIGMA_SB * PARAMS["T_floor"] ** 4)
+    direct_sed_luminosity = (
+        4.0 * PI * SIGMA_SB * direct_radius**2 * direct_temperature**4
     )
-    combined_radius = np.sqrt(
-        np.where(valid, state.Rph**2, 0.0) + direct_radius**2
+    multiband_component_error = max(
+        _max_relative(
+            photo_sed_luminosity,
+            state.Lphotospheric,
+            state.Lphotospheric > 0.0,
+        ),
+        _max_relative(
+            direct_sed_luminosity,
+            state.Ldirect,
+            state.Ldirect > 0.0,
+        ),
+        _max_relative(
+            photo_sed_luminosity + direct_sed_luminosity,
+            state.Lbol,
+        ),
     )
-    trial_temperature = (
-        state.Lbol
-        / (4.0 * PI * SIGMA_SB * combined_radius**2)
-    ) ** 0.25
-    use_combined_radius = valid & (trial_temperature > PARAMS["T_floor"])
-    multiband_combined_radius_error = _max_relative(
-        sed_radius,
-        combined_radius,
-        use_combined_radius,
+    hot_photosphere = valid & (state.Tph > PARAMS["T_floor"])
+    multiband_hot_radius_error = _max_relative(
+        photo_radius,
+        state.Rph,
+        hot_photosphere,
     )
     np.testing.assert_allclose(
-        sed_temperature[use_combined_radius],
-        trial_temperature[use_combined_radius],
+        photo_temperature[hot_photosphere],
+        state.Tph[hot_photosphere],
         rtol=0.0,
         atol=0.0,
     )
-    assert np.all(
-        sed_temperature[~use_combined_radius] == PARAMS["T_floor"]
-    )
+    assert np.all(photo_temperature[~hot_photosphere] == PARAMS["T_floor"])
+    assert np.all(direct_temperature == PARAMS["T_floor"])
+    assert np.all(photo_radius[thin] == 0.0)
 
     convergence_state = model.calculate_transport(
         THETA,
@@ -413,8 +425,8 @@ def _transport_metrics(profile: str) -> dict:
         "component_closure": closure,
         "stefan_boltzmann": sb_error,
         "photosphere_tau": tau_error,
-        "multiband_stefan_boltzmann": multiband_sb_error,
-        "multiband_combined_radius": multiband_combined_radius_error,
+        "multiband_component_closure": multiband_component_error,
+        "multiband_hot_photosphere_radius": multiband_hot_radius_error,
         "thin_heating": thin_heating_error,
         "spatial_convergence_after_5d": spatial_error,
         "spatial_convergence_before_5d_diagnostic": early_spatial_error,

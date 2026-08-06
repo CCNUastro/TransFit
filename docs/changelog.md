@@ -42,9 +42,10 @@ Here, $a(t)$ is the homologous expansion factor after shock exit.
   density name: Uniform preserves the historical outer-boundary solve and
   homologous blackbody, while BPL/Ia use the moving $\tau=2/3$ photosphere and
   direct escape outside it.
-- BPL/Ia multi-band emission converts `Ldirect` into an equivalent emitting
-  area at $T_{\rm floor}$ before normalizing the blackbody with the complete
-  `Lbol`, so exterior power is not compressed onto the retreating photosphere.
+- BPL/Ia multi-band emission adds a diluted physical-photosphere blackbody
+  normalized to `Lphotospheric` and a floor-temperature continuum normalized
+  to `Ldirect` in flux space, so exterior power is not compressed onto the
+  retreating photosphere.
 - `R_0` is the progenitor-star radius and the initial outer radius of the
   homologously expanding ejecta at explosion.
 - `f_ni` is the Lagrangian mass coordinate reached by nickel mixing. The model
@@ -139,48 +140,36 @@ T_{\rm try}=\left(\frac{L_{\rm bol}}
 {4\pi\sigma R_{\rm hom}^2}\right)^{1/4} .
 ```
 
-BPL and Ia/exponential first convert `Ldirect` to a floor-temperature emitting
-radius:
+BPL and Ia/exponential use the physical photospheric effective temperature and
+a pointwise color floor:
 
 ```math
-R_{\rm direct}=\left(\frac{L_{\rm direct}}
-{4\pi\sigma T_{\rm floor}^4}\right)^{1/2},\qquad
-R_{\rm try}=\left(R_{\rm ph}^2+R_{\rm direct}^2\right)^{1/2}.
+T_{\rm eff,ph}=\left(\frac{L_{\rm photospheric}}
+{4\pi\sigma R_{\rm ph}^2}\right)^{1/4},\qquad
+T_{\rm col,ph}=\max(T_{\rm eff,ph},T_{\rm floor}).
 ```
 
-The complete `Lbol` then sets the temperature:
+The photospheric dilution factor is
 
 ```math
-T_{\rm try}=\left(\frac{L_{\rm bol}}
-{4\pi\sigma R_{\rm try}^2}\right)^{1/4} .
+W_{\rm ph}=\left(\frac{T_{\rm eff,ph}}{T_{\rm col,ph}}\right)^4,
 ```
 
-At a valid photospheric node with $T_{\rm try}>T_{\rm floor}$, use
+and the two continua are
 
 ```math
-T_{\rm BB}=T_{\rm try},\qquad R_{\rm BB}=R_*.
+L_\nu^{\rm ph}=4\pi^2R_{\rm ph}^2W_{\rm ph}B_\nu(T_{\rm col,ph}),
 ```
-
-At all other epochs, use
 
 ```math
-T_{\rm BB}=T_{\rm floor},\qquad
-R_{\rm BB}=\sqrt{\frac{L_{\rm bol}}
-{4\pi\sigma T_{\rm floor}^4}}.
+L_\nu^{\rm direct}=L_{\rm direct}
+\frac{\pi B_\nu(T_{\rm floor})}{\sigma T_{\rm floor}^4},\qquad
+L_\nu=L_\nu^{\rm ph}+L_\nu^{\rm direct}.
 ```
 
-The corresponding blackbody spectrum is
-
-```math
-L_\nu=4\pi^2R_{\rm BB}^2B_\nu(T_{\rm BB}) .
-```
-
-The emitting radius is
-
-```math
-R_*=R_{\rm hom}\quad(\mathrm{Uniform}),\qquad
-R_*=R_{\rm try}\quad(\mathrm{BPL/Ia}).
-```
+Thus each component recovers its own bolometric luminosity and their sum
+recovers `Lbol`. After complete optical transparency, the photospheric term is
+zero and only the direct continuum remains.
 
 ### API calls
 

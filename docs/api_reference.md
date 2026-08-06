@@ -41,7 +41,7 @@ should use the canonical names.
 | `f_ni` | outer Lagrangian mass coordinate of the Ni-mixed region, $M(<x_{\rm Ni})/M_{\rm ej}$ |
 | `kappa` | optical opacity, ${\rm cm^2\,g^{-1}}$ |
 | `kappa_gamma` | gamma-ray opacity, ${\rm cm^2\,g^{-1}}$ |
-| `T_floor` | temperature floor for the Nickel physical-photosphere multi-band blackbody; defaults to 4500 K |
+| `T_floor` | Nickel multi-band color floor; for BPL/Ia it also sets the separate `Ldirect` continuum temperature; defaults to 4500 K |
 | `delta` | inner BPL density index, dimensionless |
 | `n` | outer BPL density index, dimensionless |
 
@@ -214,31 +214,33 @@ T_{\rm try}=\left(\frac{L_{\rm bol}}
 {4\pi\sigma R_{\rm hom}^2}\right)^{1/4}.
 \]
 
-BPL and Ia/exponential convert `Ldirect` to a floor-temperature radius and add
-its area to the physical photospheric area:
+BPL and Ia/exponential use
 
 \[
-R_{\rm direct}=\left(\frac{L_{\rm direct}}
-{4\pi\sigma T_{\rm floor}^4}\right)^{1/2},\qquad
-R_{\rm try}=\left(R_{\rm ph}^2+R_{\rm direct}^2\right)^{1/2},
+T_{\rm eff,ph}=\left(\frac{L_{\rm photospheric}}
+{4\pi\sigma R_{\rm ph}^2}\right)^{1/4},\qquad
+T_{\rm col,ph}=\max(T_{\rm eff,ph},T_{\rm floor}),
 \]
 
 \[
-T_{\rm try}=\left(\frac{L_{\rm bol}}
-{4\pi\sigma R_{\rm try}^2}\right)^{1/4}.
+W_{\rm ph}=\left(\frac{T_{\rm eff,ph}}{T_{\rm col,ph}}\right)^4.
 \]
 
-The hot branch uses `(Rhom,T_try)` for Uniform and `(R_try,T_try)` for BPL/Ia.
-Otherwise it uses
+Their two blackbody continua are added in flux space:
 
 \[
-T_{\rm BB}=T_{\rm floor},\qquad
-R_{\rm BB}=\left(\frac{L_{\rm bol}}
-{4\pi\sigma T_{\rm floor}^4}\right)^{1/2}.
+L_\nu^{\rm ph}=4\pi^2R_{\rm ph}^2W_{\rm ph}B_\nu(T_{\rm col,ph}),
 \]
 
-After complete optical transparency, `R_try=R_direct` and the mapping naturally
-stays on the floor. No separate nebular SED mode is introduced.
+\[
+L_\nu^{\rm direct}=L_{\rm direct}
+\frac{\pi B_\nu(T_{\rm floor})}{\sigma T_{\rm floor}^4},\qquad
+L_\nu=L_\nu^{\rm ph}+L_\nu^{\rm direct}.
+\]
+
+Each component recovers its own bolometric luminosity. After complete optical
+transparency, the photospheric term vanishes and the direct continuum remains.
+This BPL/Ia mapping currently requires the standard `BlackbodySED`.
 
 The observer-frame conversion is
 

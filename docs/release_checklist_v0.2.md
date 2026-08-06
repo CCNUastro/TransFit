@@ -16,15 +16,17 @@
 
 ## 多波段
 
-- Uniform 使用历史同模半径；BPL/Ia 把 `Ldirect` 换算成 4500 K 等效面积，
-  并与真实 `tau=2/3` 光球面积相加。
-- 高温时使用相应的同模或合并半径；其余时刻固定
-  地板温度并由完整 `Lbol` 反算半径。分支逐时刻可逆，不锁定历史状态。
-- 完全光学薄后合并半径自然退化为 `Ldirect` 的地板温度等效半径。
+- Uniform 使用历史同模半径。BPL/Ia 使用由 `Lphotospheric` 归一化的稀释
+  物理光球黑体，以及由 `Ldirect` 归一化的 4500 K 光球外连续谱。
+- BPL/Ia 光球颜色温度逐时刻取 `max(Tph, T_floor)`，并通过稀释因子保持
+  光球频谱积分等于 `Lphotospheric`；不锁定历史状态。
+- 两个分量在 flux 空间相加后统一施加消光，频率积分严格恢复 `Lbol`。
+- 完全光学薄后光球分量为零，只保留由 `Ldirect=Lbol` 归一化的连续谱。
 - `T_floor` 默认固定 4500 K；只有 `fit_multiband` 可通过
   `priors={"T_floor": (3000, 10000)}` 采样。
-- 不提供 `emission_mode`、`T_neb`、
-  单独的 `Ldirect` 或星云 SED；该映射不改变 bolometric 输运。
+- 不提供 `emission_mode` 或 `T_neb`；光球外连续谱使用同一个 `T_floor`，
+  不计算星云发射线，也不改变 bolometric 输运。BPL/Ia 仅支持标准
+  `BlackbodySED`。
 
 ## 自动验证
 
@@ -37,7 +39,7 @@ pytest -q
 
 科学 gate 检查 Uniform 历史回归，以及 BPL/Ia 的分量闭合、`tau=2/3`、
 Stefan--Boltzmann、完全光学薄尾部、
-空间/时间收敛、物理光球黑体关系和完全光学薄后 `Fnu/Lbol`。结果写入
+空间/时间收敛、双分量 bolometric 闭合和完全光学薄后 `Fnu/Lbol`。结果写入
 `result/tables/nickel-photosphere-floor-release-metrics.json`。
 目标 `Nx=100, Ny=1000` 网格要求 5 d 后空间误差和 10 d 后时间误差均小于
 0.5%；1.5 d 另以相对峰值的绝对差小于 `5e-4` 放行。更早阶段在局部光度几乎

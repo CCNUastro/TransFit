@@ -143,12 +143,12 @@ plt.show()
 ```
 
 Uniform multi-band curves use the original homologous radius and pointwise
-`T_floor` mapping. For BPL and Ia/exponential, `Ldirect` supplies an equivalent
-4500 K emitting area that is added to the physical `tau=2/3` photospheric area;
-the complete `Lbol` sets the blackbody temperature on that combined area.
-This is a continuum prescription, not a nebular-line model. Built-in filters
-currently evaluate one effective frequency; full throughput integration is not
-yet implemented.
+`T_floor` mapping. BPL and Ia/exponential add two continua in flux space: a
+diluted physical-photosphere blackbody normalized to `Lphotospheric`, and a
+4500 K blackbody continuum normalized to `Ldirect`. Their frequency integrals
+sum to `Lbol`; after complete optical transparency only the direct continuum
+remains. This is not a nebular-line model. Built-in filters currently evaluate
+one effective frequency; full throughput integration is not yet implemented.
 
 `filters` maps the band labels in your data to filter definitions. Built-in
 filters use string IDs. Custom mono filters should use an effective wavelength:
