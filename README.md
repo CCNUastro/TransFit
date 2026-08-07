@@ -484,8 +484,13 @@ archivePrefix = {arXiv},
 Parts of the code and documentation in this project were generated with
 assistance from OpenAI Codex.
 
-<p align="center">
-  <img src="docs/assets/logos/ccnu-logo.jpeg" height="150" alt="Central China Normal University logo">
-  &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="docs/assets/logos/ccnu-astronomy-logo.png" height="150" alt="CCNU Institute of Astrophysics logo">
-</p>
+<table align="center" width="100%" border="1" cellpadding="28" cellspacing="0">
+  <tr>
+    <td align="center" valign="middle" width="50%" height="220">
+      <img src="docs/assets/logos/ccnu-logo.jpeg" height="180" alt="Central China Normal University logo">
+    </td>
+    <td align="center" valign="middle" width="50%" height="220">
+      <img src="docs/assets/logos/ccnu-astronomy-logo.png" height="180" alt="CCNU Institute of Astrophysics logo">
+    </td>
+  </tr>
+</table>
