@@ -464,7 +464,6 @@ def test_fit_multiband_bpl_samples_delta_and_n_when_priors_are_explicit(monkeypa
     monkeypatch.setattr(api, "_run_sampler", fake_run_sampler)
 
     fixed = dict(PARAMS_NICKEL)
-    fixed.pop("T_floor")
     fixed.pop("delta")
     fixed.pop("n")
     fixed["t_shift"] = 0.0
@@ -567,11 +566,11 @@ def test_fit_exponential_density_allows_fixed_radius_override_and_rejects_radius
 @pytest.mark.parametrize(
     ("density_profile", "expected_fixed"),
     [
-        ("uniform", {"T_floor": 4500.0, "delta": 0.0, "n": 10.0}),
-        ("bpl", {"T_floor": 4500.0, "delta": 0.0, "n": 10.0}),
+        ("uniform", {"delta": 0.0, "n": 10.0}),
+        ("bpl", {"delta": 0.0, "n": 10.0}),
         (
             "ia",
-            {"T_floor": 4500.0, "delta": 0.0, "n": 10.0, "R_0": 0.01},
+            {"delta": 0.0, "n": 10.0, "R_0": 0.01},
         ),
     ],
 )

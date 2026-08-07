@@ -1393,7 +1393,6 @@ def test_fit_multiband_can_sample_sigma_int_as_likelihood_parameter(monkeypatch)
         yerr=np.array([0.05, 0.05, 0.05], float),
     )
     fixed = dict(PARAMS_NI)
-    fixed.pop("T_floor")
     fixed["t_shift"] = 0.0
 
     res = tf.fit_multiband(
@@ -1709,7 +1708,7 @@ def test_explicit_distance_and_extinction_roundtrip(tmp_path):
     assert loaded["ctx"]["extinction"]["band_map"]["values_mag"]["B"] == pytest.approx(0.1)
 
 
-def test_nickel_photospheric_temperature_floor_defaults_and_can_be_sampled():
+def test_nickel_photospheric_temperature_floor_is_sampled_by_default():
     model_kwargs, _ = api._split_fit_model_kwargs({}, model="nickel")
     fixed = api._apply_default_fixed_model_params(
         "nickel",
@@ -1717,7 +1716,7 @@ def test_nickel_photospheric_temperature_floor_defaults_and_can_be_sampled():
         fixed_model={},
         model_kwargs=model_kwargs,
     )
-    assert fixed["T_floor"] == pytest.approx(4500.0)
+    assert "T_floor" not in fixed
 
     sampled = api._apply_default_fixed_model_params(
         "nickel",
@@ -1726,6 +1725,40 @@ def test_nickel_photospheric_temperature_floor_defaults_and_can_be_sampled():
         model_kwargs=model_kwargs,
     )
     assert "T_floor" not in sampled
+
+
+def test_fit_multiband_samples_nickel_temperature_floor_by_default(monkeypatch):
+    def fake_run_sampler(*, sampler, lnprob, prior, sampler_kwargs):
+        assert list(prior.param_names) == ["T_floor"]
+        np.testing.assert_allclose(prior.bounds, np.array([[1000.0, 10000.0]]))
+        sample = np.array([4500.0], float)
+        return sample.reshape(1, 1), np.array([0.0]), {}, "fake"
+
+    monkeypatch.setattr(api, "_run_sampler", fake_run_sampler)
+
+    data = tf.MultiBandData(
+        t_days=np.array([1.0, 2.0, 3.0], float),
+        band=np.array(["B", "B", "B"], dtype=object),
+        y=np.array([20.0, 20.2, 20.5], float),
+        yerr=np.array([0.2, 0.2, 0.2], float),
+    )
+    fixed = dict(PARAMS_NI)
+    fixed.pop("T_floor")
+    fixed["t_shift"] = 0.0
+
+    result = tf.fit_multiband(
+        data=data,
+        model="nickel",
+        z=0.001728,
+        distance_modulus=MU_7P5_MPC,
+        filters={"B": "johnson_cousins.B"},
+        y_kind="mag",
+        fixed=fixed,
+        model_kwargs={"Nx": 20, "Ny": 50, "t_max_days": 5.0},
+    )
+
+    assert result.param_names == ["T_floor"]
+    assert result.best_params_raw["T_floor"] == pytest.approx(4500.0)
 
 
 def test_nickel_multiband_uses_default_temperature_floor():

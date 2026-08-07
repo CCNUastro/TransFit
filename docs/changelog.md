@@ -207,9 +207,10 @@ multiband_fit = tf.fit_multiband(
 )
 ```
 
-`fit_bol` does not include `T_floor`. `fit_multiband` fixes
-`T_floor=4500 K` by default and samples it only when it is explicitly included
-in `priors`.
+`fit_bol` does not include `T_floor`. In `fit_multiband`, `T_floor` now follows
+the normal fitting rule: it is sampled from the default range 1000--10000 K
+unless the user supplies it in `fixed`; `priors` can be used to choose a
+custom range.
 
 Input aliases are normalized before solving: `bpl` is equivalent to
 `broken_power_law`, while `exp` and `ia` are equivalent to `exponential`.

@@ -197,8 +197,9 @@ multiband_fit = tf.fit_multiband(
 )
 ```
 
-`fit_bol` 不包含 `T_floor`；`fit_multiband` 默认固定 `T_floor=4500 K`，只有
-显式放入 `priors` 时才采样。
+`fit_bol` 不包含 `T_floor`；在 `fit_multiband` 中，`T_floor` 现在遵循普通拟合
+参数规则：如果没有放入 `fixed`，就使用默认范围 1000--10000 K 参与采样；也可以
+通过 `priors` 指定采样范围。若要固定为 4500 K 等具体值，请放入 `fixed`。
 
 输入别名会在求解前统一转换：`bpl` 等价于 `broken_power_law`，`exp` 和
 `ia` 等价于 `exponential`；别名与完整名称给出完全相同的结果。

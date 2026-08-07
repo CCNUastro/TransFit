@@ -1189,7 +1189,7 @@ def predict_multiband(
 # -------------------------
 
 _DEFAULT_FIXED_MODEL_PARAMS = {
-    "nickel": {"T_floor": 4500.0, "delta": 0.0, "n": 10.0},
+    "nickel": {"delta": 0.0, "n": 10.0},
     "csm": {"n": 10.0, "delta": 0.0},
     "magnetar": {"f_mag": 0.2},
     "magnetar_ni": {"f_mag": 0.2},

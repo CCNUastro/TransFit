@@ -37,7 +37,7 @@ NICKEL_DEFAULT_BOUNDS = np.array([
     [0.0,     1.0],      # f_ni
     [0.01,    0.5],      # kappa
     [0.001,   0.5],      # kappa_gamma
-    [1000.0, 20000.0],   # T_floor
+    [1000.0, 10000.0],   # T_floor
     [0.0,     2.9],      # delta
     [5.1,    14.0],      # n
 ], dtype=float)

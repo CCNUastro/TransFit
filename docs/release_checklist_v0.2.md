@@ -22,8 +22,10 @@
   光球频谱积分等于 `Lphotospheric`；不锁定历史状态。
 - 两个分量在 flux 空间相加后统一施加消光，频率积分严格恢复 `Lbol`。
 - 完全光学薄后光球分量为零，只保留由 `Ldirect=Lbol` 归一化的连续谱。
-- `T_floor` 默认固定 4500 K；只有 `fit_multiband` 可通过
-  `priors={"T_floor": (3000, 10000)}` 采样。
+- `T_floor` 在 `fit_multiband` 中按普通模型参数参与采样；默认范围为
+  1000--10000 K。用户可以通过 `priors={"T_floor": (3000, 10000)}` 指定范围，
+  或通过 `fixed` 固定具体值。
+  `fit_bol` 不包含 `T_floor`。
 - 不提供 `emission_mode` 或 `T_neb`；光球外连续谱使用同一个 `T_floor`，
   不计算星云发射线，也不改变 bolometric 输运。BPL/Ia 仅支持标准
   `BlackbodySED`。

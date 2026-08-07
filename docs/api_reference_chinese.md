@@ -39,7 +39,7 @@ rest-frame time 中求解，并在 API 边界转换回 observer frame。
 | `f_ni` | Ni 混合区外边界的拉格朗日质量坐标，M(<x_Ni)/M_ej |
 | `kappa` | optical opacity，cm^2 g^-1 |
 | `kappa_gamma` | gamma-ray opacity，cm^2 g^-1 |
-| `T_floor` | Nickel 多波段颜色温度地板；BPL/Ia 中也作为独立 `Ldirect` 连续谱温度；默认 4500 K |
+| `T_floor` | Nickel 多波段颜色温度地板；BPL/Ia 中也作为独立 `Ldirect` 连续谱温度；正向计算省略时使用 4500 K |
 | `delta` | BPL 内层密度指数，无量纲 |
 | `n` | BPL 外层密度指数，无量纲 |
 
@@ -323,8 +323,10 @@ res = tf.fit_multiband(
 `fixed` 是参数名到固定值的映射。一般情况下，没有放在 `fixed` 里的模型参数会被采样，
 其范围来自默认边界或 `priors` 中用户给出的边界。
 
-有两个有意保留的例外。`fit_bol` 不包含 `T_floor`。Nickel 多波段拟合默认固定
-`T_floor=4500 K`，只有显式放入 `priors` 时才采样。`magnetar` 和
+`T_floor` 只有一个有意保留的例外：`fit_bol` 不包含它。Nickel 多波段拟合中，
+`T_floor` 遵循普通拟合参数规则：如果没有放入 `fixed` 或 `priors`，就使用默认
+范围 1000--10000 K 参与采样；如果想固定为 4500 K 等具体值，就放入 `fixed`。正向计算的
+`params` 省略 `T_floor` 时使用 4500 K。`magnetar` 和
 `magnetar_ni` 中的 `f_mag` 如果用户没有显式给
 先验，默认固定为 `0.2`；如果需要拟合它，需要给出
 `priors={"f_mag": (...)}`，并且不要同时在 `fixed` 中固定它。

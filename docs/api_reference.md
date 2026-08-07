@@ -43,7 +43,7 @@ should use the canonical names.
 | `f_ni` | outer Lagrangian mass coordinate of the Ni-mixed region, $M(<x_{\rm Ni})/M_{\rm ej}$ |
 | `kappa` | optical opacity, ${\rm cm^2\,g^{-1}}$ |
 | `kappa_gamma` | gamma-ray opacity, ${\rm cm^2\,g^{-1}}$ |
-| `T_floor` | Nickel multi-band color floor; for BPL/Ia it also sets the separate `Ldirect` continuum temperature; defaults to 4500 K |
+| `T_floor` | Nickel multi-band color floor; for BPL/Ia it also sets the separate `Ldirect` continuum temperature; forward calls use 4500 K when omitted |
 | `delta` | inner BPL density index, dimensionless |
 | `n` | outer BPL density index, dimensionless |
 
@@ -347,10 +347,12 @@ and `hi` are bounds in log10 space.
 supplied in `fixed` are sampled using their default bounds or the bounds supplied
 in `priors`.
 
-There are two intentional exceptions. In `fit_bol`, `T_floor` is not part of
-the sampled bolometric fit state. In Nickel multi-band fits, `T_floor` defaults
-to a fixed 4500 K and becomes sampled only when it is explicitly supplied in
-`priors`. In `magnetar`
+There is one intentional exception for `T_floor`: in `fit_bol`, it is not part
+of the sampled bolometric fit state. In Nickel multi-band fits, `T_floor`
+follows the general fitting rule: if it is omitted from both `fixed` and
+`priors`, it is sampled from the default range 1000--10000 K; put it in
+`fixed` when a specific value such as 4500 K should be held constant. Forward-
+model helpers use 4500 K when `T_floor` is omitted from `params`. In `magnetar`
 and `magnetar_ni`, `f_mag` defaults to a fixed value of `0.2` unless the user
 supplies an explicit prior for `f_mag` and does not also fix it.
 
