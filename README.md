@@ -487,7 +487,7 @@ assistance from OpenAI Codex.
 <table align="center" width="100%" border="1" cellpadding="28" cellspacing="0">
   <tr>
     <td align="center" valign="middle" width="50%" height="220">
-      <img src="docs/assets/logos/ccnu-logo.jpeg" height="180" alt="Central China Normal University logo">
+      <img src="docs/assets/logos/ccnu-logo.webp" height="180" alt="Central China Normal University logo">
     </td>
     <td align="center" valign="middle" width="50%" height="220">
       <img src="docs/assets/logos/ccnu-astronomy-logo.png" height="180" alt="CCNU Institute of Astrophysics logo">
