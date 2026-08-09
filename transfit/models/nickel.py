@@ -112,6 +112,56 @@ def _integral_power_law(x_lo, x_hi, power):
     return float((x_hi**exponent - x_lo**exponent) / exponent)
 
 
+@numba.njit(cache=True)
+def _integral_power_law_scalar_numba(x_lo, x_hi, power):
+    """Numba-friendly power-law integral for the cut-cell kernels."""
+    exponent = power + 1.0
+    if abs(exponent) < 1.0e-12:
+        return np.log(x_hi / x_lo)
+    return (x_hi**exponent - x_lo**exponent) / exponent
+
+
+@numba.njit(cache=True)
+def _q_profile_moment_scalar_numba(
+    q_min,
+    q_max,
+    order,
+    density_profile,
+    delta,
+    n,
+):
+    """Scalar profile moment used by the Numba cut-cell geometry kernel."""
+    if density_profile == "uniform":
+        return _integral_power_law_scalar_numba(q_min, q_max, order)
+
+    if density_profile == "exponential":
+        q_e = _EXPONENTIAL_Q_E
+        x_min = q_min / q_e
+        x_max = q_max / q_e
+        # Geometry only requests the order-two mass moment.
+        tail_min = np.exp(-x_min) * (x_min * x_min + 2.0 * x_min + 2.0)
+        tail_max = np.exp(-x_max) * (x_max * x_max + 2.0 * x_max + 2.0)
+        return q_e**3 * (tail_min - tail_max)
+
+    q_t = _BPL_Q_T
+    if q_max <= q_t:
+        return q_t**delta * _integral_power_law_scalar_numba(
+            q_min, q_max, order - delta
+        )
+    if q_min >= q_t:
+        return q_t**n * _integral_power_law_scalar_numba(
+            q_min, q_max, order - n
+        )
+    return (
+        q_t**delta * _integral_power_law_scalar_numba(
+            q_min, q_t, order - delta
+        )
+        + q_t**n * _integral_power_law_scalar_numba(
+            q_t, q_max, order - n
+        )
+    )
+
+
 def _legacy_uniform_ni_source_profile(x_vals, x_heat, xi0):
     """Return the exact historical control-volume Uniform Ni source."""
     x_vals = np.asarray(x_vals, dtype=float)
@@ -252,6 +302,37 @@ def _q_enclosed_profile_mass(q, q_min, density_profile, delta, n):
         q**outer_exponent - q_t**outer_exponent
     ) / outer_exponent
     return np.where(q <= q_t, enclosed_inner, enclosed_outer)
+
+
+@numba.njit(cache=True)
+def _q_enclosed_profile_mass_scalar_numba(q, q_min, density_profile, delta, n):
+    """Scalar enclosed profile mass for the Numba cut-cell geometry kernel."""
+    if density_profile == "uniform":
+        return (np.power(q, 3.0) - np.power(q_min, 3.0)) / 3.0
+
+    if density_profile == "exponential":
+        q_e = _EXPONENTIAL_Q_E
+        x_min = q_min / q_e
+        x = q / q_e
+        tail_min = np.exp(-x_min) * (x_min * x_min + 2.0 * x_min + 2.0)
+        tail_x = np.exp(-x) * (x * x + 2.0 * x + 2.0)
+        return q_e**3 * (tail_min - tail_x)
+
+    q_t = _BPL_Q_T
+    inner_exponent = 3.0 - delta
+    outer_exponent = 3.0 - n
+    inner_mass = q_t**delta * (
+        q_t**inner_exponent - q_min**inner_exponent
+    ) / inner_exponent
+    enclosed_inner = q_t**delta * (
+        q**inner_exponent - q_min**inner_exponent
+    ) / inner_exponent
+    enclosed_outer = inner_mass + q_t**n * (
+        q**outer_exponent - q_t**outer_exponent
+    ) / outer_exponent
+    if q <= q_t:
+        return enclosed_inner
+    return enclosed_outer
 
 
 def _q_mass_fraction_to_radius(f_mass, q_min, density_profile, delta, n):
@@ -418,7 +499,8 @@ def _finite_volume_q_cell_profiles(
     return density_cell, source_cell, shell_volume
 
 
-def _photospheric_cell_geometry(
+@numba.njit(cache=True)
+def _photospheric_cell_geometry_numba(
     q_faces,
     q_heat,
     xi0,
@@ -427,97 +509,89 @@ def _photospheric_cell_geometry(
     delta,
     n,
 ):
-    """Return cut-cell geometry and sources inside a moving photosphere."""
-    q_faces = np.asarray(q_faces, dtype=float)
-    q_photosphere = np.asarray(q_photosphere, dtype=float)
-    lower = q_faces[:-1]
-    upper = q_faces[1:]
-    full_centres = 0.5 * (lower + upper)
-    enclosed_lower = _q_enclosed_profile_mass(
-        lower, q_faces[0], density_profile, delta, n
-    )
+    """Return moving cut-cell geometry and sources with a Numba kernel."""
+    n_cells = q_faces.size - 1
+    n_times = q_photosphere.size
+    q_min = q_faces[0]
 
-    thermal_upper = np.minimum(upper[None, :], q_photosphere[:, None])
-    active = thermal_upper > lower[None, :]
-    thermal_volume = np.zeros_like(thermal_upper)
-    thermal_volume[active] = (
-        thermal_upper[active] ** 3
-        - np.broadcast_to(lower, thermal_upper.shape)[active] ** 3
-    ) / 3.0
+    thermal_upper = np.zeros((n_times, n_cells), dtype=np.float64)
+    thermal_volume = np.zeros((n_times, n_cells), dtype=np.float64)
+    density = np.ones((n_times, n_cells), dtype=np.float64)
+    centres = np.zeros((n_times, n_cells), dtype=np.float64)
+    source_density = np.zeros((n_times, n_cells), dtype=np.float64)
+    direct_fraction = np.zeros(n_times, dtype=np.float64)
+    active_count = np.zeros(n_times, dtype=np.int64)
 
-    thermal_mass = np.zeros_like(thermal_upper)
-    if np.any(active):
-        enclosed_lower_grid = np.broadcast_to(enclosed_lower, thermal_upper.shape)
-        thermal_mass[active] = (
-            _q_enclosed_profile_mass(
-                thermal_upper[active],
-                q_faces[0],
+    enclosed_lower = np.zeros(n_cells, dtype=np.float64)
+    full_centres = np.zeros(n_cells, dtype=np.float64)
+    for cell in range(n_cells):
+        lower = q_faces[cell]
+        upper = q_faces[cell + 1]
+        enclosed_lower[cell] = _q_enclosed_profile_mass_scalar_numba(
+            lower, q_min, density_profile, delta, n
+        )
+        full_centres[cell] = 0.5 * (lower + upper)
+
+    for time_index in range(n_times):
+        q_ph = q_photosphere[time_index]
+        count = 0
+        thermal_source = 0.0
+        for cell in range(n_cells):
+            lower = q_faces[cell]
+            upper = q_faces[cell + 1]
+            cut_upper = min(upper, q_ph)
+            thermal_upper[time_index, cell] = cut_upper
+            centres[time_index, cell] = full_centres[cell]
+
+            if cut_upper <= lower:
+                continue
+
+            count += 1
+            volume = (
+                np.power(cut_upper, 3.0) - np.power(lower, 3.0)
+            ) / 3.0
+            thermal_volume[time_index, cell] = volume
+            thermal_mass = (
+                _q_enclosed_profile_mass_scalar_numba(
+                    cut_upper, q_min, density_profile, delta, n
+                )
+                - enclosed_lower[cell]
+            )
+            density[time_index, cell] = thermal_mass / volume
+            centres[time_index, cell] = 0.75 * (
+                np.power(cut_upper, 4.0) - np.power(lower, 4.0)
+            ) / (
+                np.power(cut_upper, 3.0) - np.power(lower, 3.0)
+            )
+
+            source_upper = min(cut_upper, q_heat)
+            if source_upper > lower:
+                source_mass = (
+                    _q_enclosed_profile_mass_scalar_numba(
+                        source_upper, q_min, density_profile, delta, n
+                    )
+                    - enclosed_lower[cell]
+                )
+                source_density[time_index, cell] = float(xi0) * source_mass / volume
+                thermal_source += source_density[time_index, cell] * volume
+
+        active_count[time_index] = count
+
+        total_source = 0.0
+        if float(xi0) > 0.0 and float(q_heat) > q_min:
+            total_source = float(xi0) * _q_profile_moment_scalar_numba(
+                q_min,
+                float(q_heat),
+                2.0,
                 density_profile,
                 delta,
                 n,
             )
-            - enclosed_lower_grid[active]
-        )
-
-    density = np.ones_like(thermal_volume)
-    density[active] = thermal_mass[active] / thermal_volume[active]
-
-    centres = np.broadcast_to(full_centres, thermal_upper.shape).copy()
-    if np.any(active):
-        lower_grid = np.broadcast_to(lower, thermal_upper.shape)
-        centres[active] = (
-            0.75
-            * (
-                thermal_upper[active] ** 4
-                - lower_grid[active] ** 4
+        if total_source > 0.0:
+            direct_fraction[time_index] = min(
+                max(1.0 - thermal_source / total_source, 0.0),
+                1.0,
             )
-            / (
-                thermal_upper[active] ** 3
-                - lower_grid[active] ** 3
-            )
-        )
-
-    source_upper = np.minimum(thermal_upper, float(q_heat))
-    source_active = source_upper > lower[None, :]
-    source_mass = np.zeros_like(thermal_upper)
-    if np.any(source_active):
-        enclosed_lower_grid = np.broadcast_to(enclosed_lower, thermal_upper.shape)
-        source_mass[source_active] = (
-            _q_enclosed_profile_mass(
-                source_upper[source_active],
-                q_faces[0],
-                density_profile,
-                delta,
-                n,
-            )
-            - enclosed_lower_grid[source_active]
-        )
-    source_density = np.zeros_like(thermal_volume)
-    source_density[active] = (
-        float(xi0) * source_mass[active] / thermal_volume[active]
-    )
-
-    total_source = 0.0
-    if float(xi0) > 0.0 and float(q_heat) > q_faces[0]:
-        total_source = float(xi0) * _q_profile_moment(
-            q_faces[0],
-            float(q_heat),
-            2.0,
-            density_profile,
-            delta,
-            n,
-        )
-    if total_source <= 0.0:
-        direct_fraction = np.zeros(q_photosphere.size)
-    else:
-        thermal_source = np.sum(source_density * thermal_volume, axis=1)
-        direct_fraction = np.clip(
-            1.0 - thermal_source / total_source,
-            0.0,
-            1.0,
-        )
-
-    active_count = np.sum(active, axis=1).astype(np.int64)
     return (
         thermal_upper,
         thermal_volume,
@@ -527,6 +601,105 @@ def _photospheric_cell_geometry(
         direct_fraction,
         active_count,
     )
+
+
+def _photospheric_cell_geometry(
+    q_faces,
+    q_heat,
+    xi0,
+    q_photosphere,
+    density_profile,
+    delta,
+    n,
+):
+    """Normalize inputs and dispatch cut-cell geometry to the Numba kernel."""
+    q_faces = np.ascontiguousarray(np.asarray(q_faces, dtype=float))
+    q_photosphere = np.ascontiguousarray(np.asarray(q_photosphere, dtype=float))
+    return _photospheric_cell_geometry_numba(
+        q_faces, q_heat, xi0, q_photosphere, density_profile, delta, n
+    )
+
+
+@numba.njit(cache=True)
+def _photospheric_transport_coefficients_numba(
+    q_faces,
+    q_photosphere,
+    expansion_factor,
+    tau_scale,
+    thermal_volume,
+    density,
+    centres,
+    boundary_density,
+    active_count,
+    dy_values,
+):
+    """Numba kernel for moving-cut-cell diffusion coefficients."""
+    n_times, n_cells = thermal_volume.shape
+    lower = np.zeros_like(thermal_volume)
+    upper = np.zeros_like(thermal_volume)
+    boundary = np.zeros_like(thermal_volume)
+    luminosity_transport = np.zeros(n_times)
+
+    for time_index in range(n_times):
+        dy_step = dy_values[time_index]
+        count = int(active_count[time_index])
+        if count > 1:
+            for cell in range(count - 1):
+                spacing = (
+                    centres[time_index, cell + 1]
+                    - centres[time_index, cell]
+                )
+                inv_density_face = 2.0 / (
+                    density[time_index, cell]
+                    + density[time_index, cell + 1]
+                )
+                face_transport = (
+                    q_faces[cell + 1] ** 2
+                    * inv_density_face
+                    / spacing
+                )
+                upper[time_index, cell] = (
+                    dy_step
+                    * face_transport
+                    / thermal_volume[time_index, cell]
+                )
+                lower[time_index, cell + 1] = (
+                    dy_step
+                    * face_transport
+                    / thermal_volume[time_index, cell + 1]
+                )
+
+        if count > 0:
+            # Apply the same Marshak relation at the moving tau=2/3 surface.
+            boundary_distance = max(
+                q_photosphere[time_index]
+                - centres[time_index, count - 1],
+                0.0,
+            )
+            boundary_alpha = (
+                4.0
+                * expansion_factor[time_index] ** 2
+                / (
+                    3.0
+                    * tau_scale
+                    * boundary_density[time_index]
+                )
+            )
+            transport = (
+                q_photosphere[time_index] ** 2
+                / (
+                    boundary_density[time_index]
+                    * (boundary_distance + boundary_alpha)
+                )
+            )
+            boundary[time_index, count - 1] = (
+                dy_step
+                * transport
+                / thermal_volume[time_index, count - 1]
+            )
+            luminosity_transport[time_index] = transport
+
+    return lower, upper, boundary, luminosity_transport
 
 
 def _photospheric_transport_coefficients(
@@ -561,69 +734,18 @@ def _photospheric_transport_coefficients(
     if np.any(~np.isfinite(dy_values)) or np.any(dy_values <= 0.0):
         raise ValueError("Nickel time steps must be finite and positive.")
 
-    lower = np.zeros_like(thermal_volume)
-    upper = np.zeros_like(thermal_volume)
-    boundary = np.zeros_like(thermal_volume)
-    luminosity_transport = np.zeros(n_times)
-
-    for time_index in range(n_times):
-        dy_step = dy_values[time_index]
-        count = int(active_count[time_index])
-        if count > 1:
-            spacing = np.diff(centres[time_index, :count])
-            inv_density_face = 2.0 / (
-                density[time_index, : count - 1]
-                + density[time_index, 1:count]
-            )
-            face_transport = (
-                q_faces[1:count] ** 2
-                * inv_density_face
-                / spacing
-            )
-            upper[time_index, : count - 1] = (
-                dy_step
-                * face_transport
-                / thermal_volume[time_index, : count - 1]
-            )
-            lower[time_index, 1:count] = (
-                dy_step
-                * face_transport
-                / thermal_volume[time_index, 1:count]
-            )
-
-        if count > 0:
-            # Apply the same Marshak relation at the moving tau=2/3 surface.
-            # Eliminating its face value makes the emitted luminosity and the
-            # sink in the last cut cell use exactly the same radiative flux.
-            boundary_distance = max(
-                q_photosphere[time_index]
-                - centres[time_index, count - 1],
-                0.0,
-            )
-            boundary_alpha = (
-                4.0
-                * expansion_factor[time_index] ** 2
-                / (
-                    3.0
-                    * float(tau_scale)
-                    * boundary_density[time_index]
-                )
-            )
-            transport = (
-                q_photosphere[time_index] ** 2
-                / (
-                    boundary_density[time_index]
-                    * (boundary_distance + boundary_alpha)
-                )
-            )
-            boundary[time_index, count - 1] = (
-                dy_step
-                * transport
-                / thermal_volume[time_index, count - 1]
-            )
-            luminosity_transport[time_index] = transport
-
-    return lower, upper, boundary, luminosity_transport
+    return _photospheric_transport_coefficients_numba(
+        q_faces,
+        q_photosphere,
+        expansion_factor,
+        float(tau_scale),
+        thermal_volume,
+        density,
+        centres,
+        boundary_density,
+        active_count,
+        np.ascontiguousarray(dy_values),
+    )
 
 
 @numba.njit(fastmath=True, cache=True)
