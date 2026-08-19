@@ -60,9 +60,9 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/YuHaoZhang01/TransFit"
-Repository = "https://github.com/YuHaoZhang01/TransFit"
-Documentation = "https://github.com/YuHaoZhang01/TransFit/blob/main/docs/api_reference.md"
+Homepage = "https://github.com/CCNUastro/TransFit"
+Repository = "https://github.com/CCNUastro/TransFit"
+Documentation = "https://github.com/CCNUastro/TransFit/blob/main/docs/api_reference.md"
 Paper = "https://doi.org/10.3847/1538-4357/adfed6"
 
 [tool.setuptools]
