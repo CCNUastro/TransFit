@@ -1,6 +1,7 @@
 from importlib import import_module
+from importlib.metadata import version
 
-__version__ = "0.2.1"
+__version__ = version("transfit")
 
 from .api import (
     BolometricLC, MultiBandLC,
