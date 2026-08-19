@@ -6,6 +6,12 @@ from .core import FilterProfile
 
 
 _BUILTIN_FILTERS: Dict[str, Dict[str, object]] = {
+    "johnson_cousins.U": {
+        "kind": "mono",
+        "nu_eff_hz": 8.44e14,
+        "zero_points_jy": {"vega": 1438.73},
+        "meta": {"family": "Johnson-Cousins", "svo_fps_id": "Generic/Johnson.U"},
+    },
     "johnson_cousins.B": {
         "kind": "mono",
         "nu_eff_hz": 6.80e14,
