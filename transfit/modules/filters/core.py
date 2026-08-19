@@ -80,6 +80,13 @@ class FilterProfile:
         object.__setattr__(self, "zero_points_jy", zero_points_jy)
         object.__setattr__(self, "meta", dict(self.meta or {}))
 
+    @property
+    def lambda_eff_A(self) -> float:
+        if self.nu_eff_hz is not None:
+            nu_eff = float(self.nu_eff_hz) * u.Hz
+            return nu_eff.to_value(u.AA, u.spectral())
+        return None
+
     @classmethod
     def from_dict(cls, label: str, payload: Mapping[str, object]) -> "FilterProfile":
         nu_eff_hz = payload.get("nu_eff_hz")
@@ -111,7 +118,7 @@ class FilterProfile:
         }
         if self.nu_eff_hz is not None:
             out["nu_eff_hz"] = float(self.nu_eff_hz)
-            out["lambda_eff_A"] = u.Quantity(out["nu_eff_hz"], u.Hz).to_value(u.AA, u.spectral())
+            out["lambda_eff_A"] = self.lambda_eff_A
         if self.wavelength_A is not None:
             out["wavelength_A"] = self.wavelength_A.tolist()
         if self.throughput is not None:
