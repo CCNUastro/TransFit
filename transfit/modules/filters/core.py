@@ -5,6 +5,10 @@ from typing import Any, Dict, Literal, Mapping, Optional
 
 import numpy as np
 from astropy import units as u
+try:
+    from astroquery.svo_fps import SvoFps
+except ImportError:
+    SvoFps = None
 
 
 @dataclass(frozen=True)
@@ -12,7 +16,7 @@ class FilterProfile:
     label: str
     filter_id: str
     kind: Literal["mono", "bandpass"]
-    source: Literal["builtin", "user", "legacy"]
+    source: Literal["builtin", "svo_fps", "user", "legacy"]
     detector: Literal["energy", "photon"] = "energy"
     nu_eff_hz: Optional[float] = None
     wavelength_A: Optional[np.ndarray] = None
@@ -33,7 +37,7 @@ class FilterProfile:
             raise ValueError(f"Unknown filter kind {self.kind!r}.")
 
         source = str(self.source).strip().lower()
-        if source not in ("builtin", "user", "legacy"):
+        if source not in ("builtin", "svo_fps", "user", "legacy"):
             raise ValueError(f"Unknown filter source {self.source!r}.")
 
         detector = str(self.detector).strip().lower()
@@ -86,6 +90,36 @@ class FilterProfile:
             nu_eff = float(self.nu_eff_hz) * u.Hz
             return nu_eff.to_value(u.AA, u.spectral())
         return None
+
+    @classmethod
+    def from_svofps(cls, label: str, svo_fps_id: str, **kwargs) -> "FilterProfile":
+        if SvoFps is None:
+            raise RuntimeError("The astroquery.svo_fps package could not be imported. Is astroquery installed?")
+
+        inst_name = svo_fps_id.split("/")[1].split(".")[0]
+        transmission = SvoFps.get_transmission_data(svo_fps_id)
+        metadata = SvoFps.get_filter_metadata(svo_fps_id)
+        lambda_eff = metadata.get("WavelengthEff")
+        if lambda_eff is not None:
+            nu_eff_hz = lambda_eff.to_value(u.Hz, u.spectral())
+        else:
+            nu_eff_hz = None
+        return cls(
+            label=str(label),
+            filter_id=f"svo_fps:{svo_fps_id}",
+            kind="bandpass",
+            source="svo_fps",
+            detector=str(kwargs.get("detector", "energy")),
+            nu_eff_hz=nu_eff_hz,
+            wavelength_A=transmission["Wavelength"].quantity.to_value(u.AA),
+            throughput=transmission["Transmission"].quantity.value,
+            zero_points_jy={metadata["MagSys"].lower(): metadata["ZeroPoint"].to_value(u.Jy, u.spectral_density(lambda_eff))},
+            meta={
+                "family": metadata.get("PhotSystem") or inst_name,
+                "svo_fps_id": metadata.get("filterID", svo_fps_id),
+                "comment": metadata.get("Comments", ""),
+            }
+        )
 
     @classmethod
     def from_dict(cls, label: str, payload: Mapping[str, object]) -> "FilterProfile":
