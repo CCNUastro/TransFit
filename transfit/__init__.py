@@ -1,6 +1,6 @@
 from importlib import import_module
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 from .api import (
     BolometricLC, MultiBandLC,
