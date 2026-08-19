@@ -9,7 +9,7 @@ from transfit.constants import C_LIGHT
 
 from ..labels import normalize_band_label
 from .core import FilterProfile
-from .registry import get_builtin_filter
+from .registry import get_builtin_filter, list_builtin_filters
 
 
 _LAMBDA_EFF_FACTORS_A = {
@@ -186,27 +186,65 @@ def _require_mag_system(filters: Mapping[str, FilterProfile], used_bands: Iterab
 
 
 def normalize_filters(
-    filters: Mapping[str, object],
+    filters: Optional[Mapping[str, object]] = None,
     *,
     used_bands: Optional[Iterable[str]] = None,
     mag_system: str = "ab",
 ) -> Dict[str, FilterProfile]:
-    if not isinstance(filters, Mapping) or len(filters) == 0:
-        raise ValueError("filters must be a non-empty mapping.")
+    """Normalize explicit filter specs and auto-resolve built-in band labels.
+
+    When ``used_bands`` is provided, any used band that is not explicitly
+    present in ``filters`` is interpreted as a built-in ``filter_id``. This
+    lets data labelled with registry ids such as ``"sdss.u"`` work without
+    requiring the redundant mapping ``{"sdss.u": {"filter_id": "sdss.u"}}``.
+
+    Explicit entries remain authoritative, so aliases and custom filters still
+    use the existing mapping forms.
+    """
+    if filters is None:
+        explicit: Mapping[str, object] = {}
+    elif isinstance(filters, Mapping):
+        explicit = filters
+    else:
+        raise TypeError("filters must be a mapping or None.")
 
     out: Dict[str, FilterProfile] = {}
-    for raw_label, spec in filters.items():
+    for raw_label, spec in explicit.items():
         label = normalize_band_label(raw_label)
         out[label] = _normalize_one(label, spec)
 
-    bands_for_check = list(out.keys()) if used_bands is None else [normalize_band_label(b) for b in used_bands]
+    if used_bands is None:
+        if not out:
+            raise ValueError("filters must be a non-empty mapping when used_bands is not provided.")
+        bands_for_check = list(out.keys())
+    else:
+        bands_for_check = [normalize_band_label(b) for b in used_bands]
+        unresolved = []
+        for label in dict.fromkeys(bands_for_check):
+            if label in out:
+                continue
+            try:
+                out[label] = get_builtin_filter(label=label, filter_id=label)
+            except KeyError:
+                unresolved.append(label)
+
+        if unresolved:
+            raise KeyError(
+                "No filter definition was provided for these bands and their labels are not "
+                f"recognized built-in filter_ids: {unresolved}. Pass explicit entries in "
+                "filters for aliases/custom filters. Available built-in filter_ids: "
+                f"{list_builtin_filters()}"
+            )
+        if not out:
+            raise ValueError("used_bands must contain at least one band when filters is omitted.")
+
     _require_used_bands(out, bands_for_check)
     _require_mag_system(out, bands_for_check, mag_system)
     return out
 
 
 def validate_filter_map(
-    filters: Mapping[str, object],
+    filters: Optional[Mapping[str, object]],
     *,
     used_bands: Iterable[str],
     mag_system: str = "ab",
