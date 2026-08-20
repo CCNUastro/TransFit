@@ -123,6 +123,60 @@ _BUILTIN_FILTERS: Dict[str, Dict[str, object]] = {
             "svo_fps_id": "Palomar/ZTF.i"
         },
     },
+        "lsst.u": {
+        "kind": "mono",
+        "nu_eff_hz": 8.14e+14,
+        "zero_points_jy": {},
+        "meta": {
+            "family": "LSST",
+            "svo_fps_id": "LSST/LSST.u"
+        }
+    },
+    "lsst.g": {
+        "kind": "mono",
+        "nu_eff_hz": 6.24e+14,
+        "zero_points_jy": {},
+        "meta": {
+            "family": "LSST",
+            "svo_fps_id": "LSST/LSST.g"
+        }
+    },
+    "lsst.r": {
+        "kind": "mono",
+        "nu_eff_hz": 4.81e+14,
+        "zero_points_jy": {},
+        "meta": {
+            "family": "LSST",
+            "svo_fps_id": "LSST/LSST.r"
+        }
+    },
+    "lsst.i": {
+        "kind": "mono",
+        "nu_eff_hz": 3.98e+14,
+        "zero_points_jy": {},
+        "meta": {
+            "family": "LSST",
+            "svo_fps_id": "LSST/LSST.i"
+        }
+    },
+    "lsst.z": {
+        "kind": "mono",
+        "nu_eff_hz": 3.45e+14,
+        "zero_points_jy": {},
+        "meta": {
+            "family": "LSST",
+            "svo_fps_id": "LSST/LSST.z"
+        }
+    },
+    "lsst.y": {
+        "kind": "mono",
+        "nu_eff_hz": 3.08e+14,
+        "zero_points_jy": {},
+        "meta": {
+            "family": "LSST",
+            "svo_fps_id": "LSST/LSST.y"
+        }
+    },
 }
 
 
