@@ -53,7 +53,7 @@ _BUILTIN_FILTERS: Dict[str, Dict[str, object]] = {
     },
     "sdss.u": {
         "kind": "mono",
-        "nu_eff_hz": 8.31e14,
+        "nu_eff_hz": 8.42e+14,
         "zero_points_jy": {},
         "meta": {
             "family": "SDSS",
@@ -62,7 +62,7 @@ _BUILTIN_FILTERS: Dict[str, Dict[str, object]] = {
     },
     "sdss.g": {
         "kind": "mono",
-        "nu_eff_hz": 6.42e14,
+        "nu_eff_hz": 6.35e+14,
         "zero_points_jy": {},
         "meta": {
             "family": "SDSS",
@@ -71,7 +71,7 @@ _BUILTIN_FILTERS: Dict[str, Dict[str, object]] = {
     },
     "sdss.r": {
         "kind": "mono",
-        "nu_eff_hz": 4.88e14,
+        "nu_eff_hz": 4.85e+14,
         "zero_points_jy": {},
         "meta": {
             "family": "SDSS",
@@ -80,7 +80,7 @@ _BUILTIN_FILTERS: Dict[str, Dict[str, object]] = {
     },
     "sdss.i": {
         "kind": "mono",
-        "nu_eff_hz": 4.02e14,
+        "nu_eff_hz": 4.00e+14,
         "zero_points_jy": {},
         "meta": {
             "family": "SDSS",
@@ -89,7 +89,7 @@ _BUILTIN_FILTERS: Dict[str, Dict[str, object]] = {
     },
     "sdss.z": {
         "kind": "mono",
-        "nu_eff_hz": 3.36e14,
+        "nu_eff_hz": 3.35e+14,
         "zero_points_jy": {},
         "meta": {
             "family": "SDSS",
@@ -98,7 +98,7 @@ _BUILTIN_FILTERS: Dict[str, Dict[str, object]] = {
     },
     "ztf.g": {
         "kind": "mono",
-        "nu_eff_hz": 6.38e14,
+        "nu_eff_hz": 6.25e14,
         "zero_points_jy": {},
         "meta": {
             "family": "ZTF",
@@ -107,7 +107,7 @@ _BUILTIN_FILTERS: Dict[str, Dict[str, object]] = {
     },
     "ztf.r": {
         "kind": "mono",
-        "nu_eff_hz": 4.84e14,
+        "nu_eff_hz": 4.66e14,
         "zero_points_jy": {},
         "meta": {
             "family": "ZTF",
