@@ -99,11 +99,12 @@ class FilterProfile:
         inst_name = svo_fps_id.split("/")[1].split(".")[0]
         transmission = SvoFps.get_transmission_data(svo_fps_id)
         metadata = SvoFps.get_filter_metadata(svo_fps_id)
-        lambda_eff = metadata.get("WavelengthEff")
-        if lambda_eff is not None:
-            nu_eff_hz = lambda_eff.to_value(u.Hz, u.spectral())
-        else:
-            nu_eff_hz = None
+        wav_arr = transmission["Wavelength"].quantity.to_value(u.AA)
+        throughput_arr = transmission["Transmission"].quantity.value
+        numerator = np.trapezoid(wav_arr*throughput_arr, x=wav_arr)
+        denominator = np.trapezoid(throughput_arr, x=wav_arr)
+        lambda_eff = (numerator/denominator)*u.AA
+        nu_eff_hz = lambda_eff.to_value(u.Hz, u.spectral())
         return cls(
             label=str(label),
             filter_id=f"svo_fps:{svo_fps_id}",
@@ -111,8 +112,8 @@ class FilterProfile:
             source="svo_fps",
             detector=str(kwargs.get("detector", "energy")),
             nu_eff_hz=nu_eff_hz,
-            wavelength_A=transmission["Wavelength"].quantity.to_value(u.AA),
-            throughput=transmission["Transmission"].quantity.value,
+            wavelength_A=wav_arr,
+            throughput=throughput_arr,
             zero_points_jy={metadata["MagSys"].lower(): metadata["ZeroPoint"].to_value(u.Jy, u.spectral_density(lambda_eff))},
             meta={
                 "family": metadata.get("PhotSystem") or inst_name,
