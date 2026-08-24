@@ -4,7 +4,113 @@
   <strong>Language:</strong> <a href="changelog.md">English</a> | 简体中文
 </p>
 
-这里长期记录面向用户的更新，最新版本写在最前面。
+## v0.3
+
+### 多波段拟合支持 upper limit
+
+- `MultiBandData` 新增逐行对应的 `is_upper_limit` 和
+  `upper_limit_nsigma` 字段。
+- detection 保持原有 Gaussian likelihood；非探测数据在 flux 空间使用单边
+  Gaussian CDF likelihood：
+
+```math
+\ln \mathcal{L}_{\rm UL}
+=
+\ln \Phi\!\left(\frac{F_{\rm lim}-F_{\rm model}}{\sigma_F}\right).
+```
+
+- 如果论文说明 upper limit 是 `3σ`、`5σ` 或其他显著度，用户只需把对应
+  数值填入 `upper_limit_nsigma`。如果论文只给出 limit 而没有说明显著度，
+  可以不填写该字段，TransFit 会使用默认的 `5σ` 设置。
+- `sigma_int` 仍然只作用于 detection。多波段拟合图用向下三角表示 upper
+  limit。
+- `fit_multiband()` 不新增参数；所有 upper-limit 信息都与对应观测行一起存放
+  在 `MultiBandData` 中。
+
+### 公开接口与使用方法
+
+```python
+tf.MultiBandData(
+    t_days,
+    band,
+    y,
+    yerr,
+    mask=None,
+    is_upper_limit=None,
+    upper_limit_nsigma=None,
+)
+```
+
+每个 upper-limit 行都把论文给出的 limiting magnitude 或 limiting flux 放在
+`y` 中。误差信息按照下表填写：
+
+| 已知信息 | `yerr` | `upper_limit_nsigma` |
+|---|---:|---:|
+| 已知一倍标准差噪声 | 正数 | `np.nan` |
+| 论文给出 `3σ` 或 `5σ` limit | `np.nan` | `3.0` 或 `5.0` |
+| 只有 limit | `np.nan` | `np.nan`，默认按 `5σ` |
+
+detection 行必须提供有限且为正的 `yerr`，其 `upper_limit_nsigma` 应为
+`np.nan`。同一个 upper-limit 行同时填写 `yerr` 和
+`upper_limit_nsigma` 会抛出 `ValueError`。
+
+下面的例子包含 `5σ` 和 `3σ` magnitude limits：
+
+```python
+import numpy as np
+import transfit as tf
+
+data = tf.MultiBandData(
+    t_days=np.array([-8, -4, 0, 5, 12, -6, 1, 8], dtype=float),
+    band=np.array(["B", "B", "B", "B", "B", "V", "V", "V"]),
+    y=np.array([21.7, 21.5, 20.4, 18.8, 19.5, 21.2, 20.1, 19.0]),
+    yerr=np.array([
+        np.nan, np.nan,
+        0.12, 0.08, 0.10,
+        np.nan,
+        0.10, 0.08,
+    ]),
+    is_upper_limit=np.array([
+        True, True,
+        False, False, False,
+        True,
+        False, False,
+    ]),
+    upper_limit_nsigma=np.array([
+        5.0, 3.0,
+        np.nan, np.nan, np.nan,
+        5.0,
+        np.nan, np.nan,
+    ]),
+)
+
+result = tf.fit_multiband(
+    data=data,
+    model="nickel",
+    z=0.01,
+    filters=filters,
+    y_kind="mag",
+    priors=priors,
+    fixed=fixed,
+)
+```
+
+如果全部 upper limit 都具有相同显著度，也可以传入标量；该数值只应用到
+`is_upper_limit=True` 的数据行：
+
+```python
+data = tf.MultiBandData(
+    t_days=t_days,
+    band=band,
+    y=y,
+    yerr=yerr,
+    is_upper_limit=is_upper_limit,
+    upper_limit_nsigma=5.0,
+)
+```
+
+拟合结果的 metadata 会分别记录 detection 数量、使用实际误差的 limit 数量、
+使用显式 `nσ` 的 limit 数量，以及使用默认 `5σ` 的 limit 数量。
 
 ## v0.2
 

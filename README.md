@@ -304,8 +304,22 @@ tf.save(res, "mcmc_out/sn2007gr_multiband_nickel.npz")
 
 ```python
 tf.BolometricData(t_days, y, yerr, mask=None)
-tf.MultiBandData(t_days, band, y, yerr, mask=None)
+tf.MultiBandData(
+    t_days,
+    band,
+    y,
+    yerr,
+    mask=None,
+    is_upper_limit=None,
+    upper_limit_nsigma=None,
+)
 ```
+
+Set `is_upper_limit=True` for non-detection rows and store the reported
+limiting magnitude or flux in `y`. Set `upper_limit_nsigma=3` or `5` when that
+significance is published. If neither an upper-limit `yerr` nor
+`upper_limit_nsigma` is available, TransFit defaults to 5 sigma. Upper limits
+use a one-sided Gaussian-CDF likelihood.
 
 </details>
 

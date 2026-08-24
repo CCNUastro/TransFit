@@ -720,7 +720,8 @@ def fit_multiband(
 ):
     """
     Multi-band fit plot in a SINGLE panel.
-    data must provide: t_days, band, y, yerr
+    data must provide: t_days, band, y, yerr. Upper limits from
+    ``data.is_upper_limit`` are shown as downward triangles.
     Bands are grouped exactly as they appear (case-sensitive, no normalization).
     """
     from ..api import lightcurve_multiband, predict_multiband  # lazy import
@@ -771,6 +772,14 @@ def fit_multiband(
     y_obs = np.asarray(data.y, float).reshape(-1)
     y_err = np.asarray(data.yerr, float).reshape(-1)
     band = np.asarray(data.band).reshape(-1)
+    upper_raw = getattr(data, "is_upper_limit", None)
+    is_upper_limit = (
+        np.zeros(t_obs.size, dtype=bool)
+        if upper_raw is None
+        else np.asarray(upper_raw, bool).reshape(-1)
+    )
+    if is_upper_limit.size != t_obs.size:
+        raise ValueError("data.is_upper_limit must have the same length as data.t_days.")
 
     bands = _unique_in_order(band.tolist())
 
@@ -802,12 +811,23 @@ def fit_multiband(
         for b in bands:
             c = color_map[b]
             m = (band == b)
+            m_detection = m & ~is_upper_limit
+            m_upper = m & is_upper_limit
 
-            ax.errorbar(
-                t_obs[m], y_obs[m], yerr=y_err[m],
-                fmt=".", ms=ms_data, capsize=capsize,
-                color=c, alpha=0.9, label=f"{b} data",
-            )
+            if np.any(m_detection):
+                ax.errorbar(
+                    t_obs[m_detection], y_obs[m_detection], yerr=y_err[m_detection],
+                    fmt=".", ms=ms_data, capsize=capsize,
+                    color=c, alpha=0.9, label=f"{b} data",
+                )
+            if np.any(m_upper):
+                ax.plot(
+                    t_obs[m_upper], y_obs[m_upper],
+                    linestyle="none", marker="v", ms=ms_data + 1.0,
+                    markerfacecolor="none", markeredgecolor=c,
+                    markeredgewidth=1.2, alpha=0.9,
+                    label=f"{b} upper limit",
+                )
 
             # Keep x-axis in observed time and shift the raw model grid by t_shift.
             y_line = np.asarray(lc.y[b], float)
@@ -847,7 +867,11 @@ def fit_multiband(
                     yj = _anchor_model_origin_for_plot(
                         yj,
                         y_kind=y_kind,
-                        y_reference=y_obs[m],
+                        y_reference=(
+                            y_obs[m_detection]
+                            if np.any(m_detection)
+                            else y_obs[m]
+                        ),
                         t_plot=t_plot,
                     )
                     ys.append(yj)

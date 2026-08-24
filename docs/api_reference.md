@@ -131,7 +131,15 @@ fitting.
 ### `MultiBandData`
 
 ```python
-tf.MultiBandData(t_days, band, y, yerr, mask=None)
+tf.MultiBandData(
+    t_days,
+    band,
+    y,
+    yerr,
+    mask=None,
+    is_upper_limit=None,
+    upper_limit_nsigma=None,
+)
 ```
 
 `MultiBandData` stores multi-band photometry.
@@ -143,6 +151,50 @@ tf.MultiBandData(t_days, band, y, yerr, mask=None)
 | `y` | magnitude if `y_kind="mag"`, flux density if `y_kind="flux"` |
 | `yerr` | one-sigma uncertainty in the same units as `y` |
 | `mask` | optional boolean mask; only masked-in points are used |
+| `is_upper_limit` | optional boolean flag; `True` marks a non-detection limit |
+| `upper_limit_nsigma` | optional scalar or row-aligned significance of each upper limit, such as 3 or 5 |
+
+For an upper-limit row, put the reported limiting magnitude or flux in `y`.
+There are three supported uncertainty cases:
+
+1. If the one-sigma noise is known, put it in that row's `yerr` and leave
+   `upper_limit_nsigma` as `NaN`.
+2. If the paper reports a 3-sigma or 5-sigma limit, set that row's
+   `upper_limit_nsigma` to `3` or `5` and set `yerr=np.nan`.
+3. If only the limit is available, leave both values missing; TransFit defaults
+   to a 5-sigma interpretation.
+
+Providing both `yerr` and `upper_limit_nsigma` for the same upper-limit row is
+an error. Detections require finite positive `yerr` and do not use
+`upper_limit_nsigma`.
+
+Upper limits use a one-sided Gaussian-CDF likelihood in flux space:
+
+```math
+\ln \mathcal{L}_{\rm UL}
+=
+\ln \Phi\!\left(\frac{F_{\rm lim}-F_{\rm model}}{\sigma_F}\right).
+```
+
+For an `n`-sigma limit, TransFit uses `sigma_F = F_lim / n`. For magnitude
+data, the model-to-limit flux ratio is obtained directly from the magnitude
+difference, so the magnitude zero point cancels. A finite upper-limit `yerr`
+in magnitude space is converted locally to a fractional flux error.
+
+```python
+data = tf.MultiBandData(
+    t_days=np.array([-5.0, 0.0, 5.0]),
+    band=np.array(["r", "r", "r"]),
+    y=np.array([21.5, 20.1, 18.7]),
+    yerr=np.array([np.nan, 0.1, 0.05]),
+    is_upper_limit=np.array([True, False, False]),
+    upper_limit_nsigma=np.array([3.0, np.nan, np.nan]),
+)
+```
+
+No additional `fit_multiband()` option is needed. The result metadata records
+the CDF convention, explicit significance usage, default 5-sigma assumption,
+and upper-limit counts.
 
 ## Forward and Prediction Calls
 

@@ -295,8 +295,21 @@ tf.save(res, "mcmc_out/sn2007gr_multiband_nickel.npz")
 
 ```python
 tf.BolometricData(t_days, y, yerr, mask=None)
-tf.MultiBandData(t_days, band, y, yerr, mask=None)
+tf.MultiBandData(
+    t_days,
+    band,
+    y,
+    yerr,
+    mask=None,
+    is_upper_limit=None,
+    upper_limit_nsigma=None,
+)
 ```
+
+非探测数据行设置 `is_upper_limit=True`，并把 limiting magnitude 或 flux
+放在 `y` 中。论文给出 `3σ` 或 `5σ` 时，通过 `upper_limit_nsigma` 逐行填写。
+upper-limit 行的 `yerr` 和 `upper_limit_nsigma` 都缺失时，TransFit 默认按
+`5σ` 处理。upper limit 使用单边 Gaussian CDF likelihood。
 
 </details>
 

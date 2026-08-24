@@ -23,12 +23,22 @@ class MultiBandData:
         1-sigma uncertainties, same length as y.
     mask : array, optional
         Boolean mask of same length; if provided, only masked-in points are used.
+    is_upper_limit : array, optional
+        Boolean flag for non-detection limits. For flagged rows, ``y`` is the
+        reported limiting magnitude or flux. ``yerr`` may be NaN when the
+        one-sigma noise is unavailable.
+    upper_limit_nsigma : array, optional
+        Detection significance (for example 3 or 5) for upper-limit rows that
+        do not provide ``yerr``. May be a scalar or an array aligned with the
+        data. Missing values use TransFit's default 5-sigma interpretation.
     """
     t_days: np.ndarray
     band: np.ndarray
     y: np.ndarray
     yerr: np.ndarray
     mask: Optional[np.ndarray] = None
+    is_upper_limit: Optional[np.ndarray] = None
+    upper_limit_nsigma: Optional[np.ndarray] = None
 
     def __post_init__(self):
         t = np.asarray(self.t_days, float)
@@ -42,16 +52,45 @@ class MultiBandData:
         if not (b.size == y.size == e.size == n):
             raise ValueError("t_days/band/y/yerr must have the same length.")
 
+        m = None
         if self.mask is not None:
             m = np.asarray(self.mask, bool)
             if m.shape != (n,):
                 raise ValueError("mask must have shape (N,).")
+
+        if self.is_upper_limit is None:
+            upper = np.zeros(n, dtype=bool)
+        else:
+            upper_in = np.asarray(self.is_upper_limit, bool)
+            if upper_in.ndim == 0:
+                upper = np.full(n, bool(upper_in), dtype=bool)
+            elif upper_in.shape == (n,):
+                upper = upper_in
+            else:
+                raise ValueError("is_upper_limit must be a scalar or have shape (N,).")
+
+        if self.upper_limit_nsigma is None:
+            nsigma = np.full(n, np.nan, dtype=float)
+        else:
+            nsigma_in = np.asarray(self.upper_limit_nsigma, float)
+            if nsigma_in.ndim == 0:
+                nsigma = np.full(n, np.nan, dtype=float)
+                nsigma[upper] = float(nsigma_in)
+            elif nsigma_in.shape == (n,):
+                nsigma = nsigma_in
+            else:
+                raise ValueError(
+                    "upper_limit_nsigma must be a scalar or have shape (N,)."
+                )
 
         # store normalized arrays back (frozen dataclass -> use object.__setattr__)
         object.__setattr__(self, "t_days", t)
         object.__setattr__(self, "band", b)
         object.__setattr__(self, "y", y)
         object.__setattr__(self, "yerr", e)
+        object.__setattr__(self, "mask", m)
+        object.__setattr__(self, "is_upper_limit", upper)
+        object.__setattr__(self, "upper_limit_nsigma", nsigma)
 
     def filtered(self) -> "MultiBandData":
         """
@@ -64,6 +103,8 @@ class MultiBandData:
             return self
 
         good = np.asarray(self.mask, bool)
+        upper = getattr(self, "is_upper_limit", None)
+        nsigma = getattr(self, "upper_limit_nsigma", None)
 
         return MultiBandData(
             t_days=self.t_days[good],
@@ -71,6 +112,12 @@ class MultiBandData:
             y=self.y[good],
             yerr=self.yerr[good],
             mask=None,
+            is_upper_limit=(
+                None if upper is None else np.asarray(upper, bool)[good]
+            ),
+            upper_limit_nsigma=(
+                None if nsigma is None else np.asarray(nsigma, float)[good]
+            ),
         )
 
     @property

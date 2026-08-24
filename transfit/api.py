@@ -19,7 +19,11 @@ from .modules.filters import FilterProfile, normalize_filters, validate_filter_m
 from .modules.fnu import evaluate_multiband_model_fnu
 from .modules.interp import interp_fit
 from .modules.labels import normalize_band_label
-from .modules.likelihood import gaussian_lnlike_with_nuisance
+from .modules.likelihood import (
+    DEFAULT_UPPER_LIMIT_NSIGMA,
+    gaussian_lnlike_with_nuisance,
+    upper_limit_gaussian_cdf_lnlike,
+)
 from .modules.photometry import (
     evaluate_multiband_observer_output,
     fnu_grid_to_observation_output,
@@ -270,12 +274,72 @@ def _validate_fit_time_and_errors(t_obs: np.ndarray, y_err: np.ndarray) -> None:
         raise ValueError("data.yerr must be finite and > 0.")
 
 
-def _validate_multiband_fit_y(y_obs: np.ndarray, *, y_kind: str) -> None:
+def _validate_multiband_fit_errors(
+    y_err: np.ndarray,
+    is_upper_limit: np.ndarray,
+    upper_limit_nsigma: Optional[np.ndarray] = None,
+) -> None:
+    y_err = np.asarray(y_err, float).reshape(-1)
+    upper = np.asarray(is_upper_limit, bool).reshape(-1)
+    if y_err.size != upper.size:
+        raise ValueError("data.yerr and data.is_upper_limit must have the same length.")
+
+    if upper_limit_nsigma is None:
+        nsigma = np.full(y_err.size, np.nan, dtype=float)
+    else:
+        nsigma = np.asarray(upper_limit_nsigma, float).reshape(-1)
+        if nsigma.size != y_err.size:
+            raise ValueError(
+                "data.upper_limit_nsigma must have the same length as data.yerr."
+            )
+
+    detection_err = y_err[~upper]
+    if np.any(~np.isfinite(detection_err)) or np.any(detection_err <= 0.0):
+        raise ValueError("data.yerr must be finite and > 0 for detections.")
+
+    upper_err = y_err[upper]
+    if np.any(np.isinf(upper_err)) or np.any(
+        np.isfinite(upper_err) & (upper_err <= 0.0)
+    ):
+        raise ValueError(
+            "Upper-limit data.yerr must be finite and > 0 when provided; "
+            "use np.nan when the one-sigma error is unavailable."
+        )
+
+    if np.any(np.isinf(nsigma)) or np.any(np.isfinite(nsigma) & (nsigma <= 0.0)):
+        raise ValueError(
+            "data.upper_limit_nsigma must be finite and > 0 when provided."
+        )
+    if np.any(np.isfinite(nsigma[~upper])):
+        raise ValueError(
+            "data.upper_limit_nsigma may only be set for upper-limit rows."
+        )
+    if np.any(np.isfinite(upper_err) & np.isfinite(nsigma[upper])):
+        raise ValueError(
+            "For each upper-limit row, provide either data.yerr or "
+            "data.upper_limit_nsigma, not both."
+        )
+
+
+def _validate_multiband_fit_y(
+    y_obs: np.ndarray,
+    *,
+    y_kind: str,
+    is_upper_limit: Optional[np.ndarray] = None,
+) -> None:
     kind = str(y_kind).strip().lower()
     if kind not in ("mag", "flux"):
         raise ValueError("y_kind must be 'mag' or 'flux'.")
     if np.any(~np.isfinite(y_obs)):
         raise ValueError(f"data.y must be finite when y_kind='{kind}'.")
+    if is_upper_limit is None:
+        return
+
+    upper = np.asarray(is_upper_limit, bool).reshape(-1)
+    if upper.size != np.asarray(y_obs).size:
+        raise ValueError("data.y and data.is_upper_limit must have the same length.")
+    if kind == "flux" and np.any(np.asarray(y_obs, float).reshape(-1)[upper] <= 0.0):
+        raise ValueError("Upper-limit data.y must be positive when y_kind='flux'.")
 
 
 def _validate_bolometric_fit_y(y_obs: np.ndarray) -> None:
@@ -1686,6 +1750,28 @@ class _FitLnProb:
     predictor: Callable[[Dict[str, float], np.ndarray], np.ndarray]
     likelihood_y_kind: str
     nuisance_cfgs: Dict[str, Dict[str, Any]]
+    is_upper_limit: Optional[np.ndarray] = None
+    upper_limit_nsigma: Optional[np.ndarray] = None
+
+    def __post_init__(self):
+        n_obs = np.asarray(self.t_obs).size
+        if self.is_upper_limit is None:
+            upper = np.zeros(n_obs, dtype=bool)
+        else:
+            upper = np.asarray(self.is_upper_limit, bool).reshape(-1)
+            if upper.size != n_obs:
+                raise ValueError("is_upper_limit must have the same length as t_obs.")
+
+        if self.upper_limit_nsigma is None:
+            nsigma = np.full(n_obs, np.nan, dtype=float)
+        else:
+            nsigma = np.asarray(self.upper_limit_nsigma, float).reshape(-1)
+            if nsigma.size != n_obs:
+                raise ValueError(
+                    "upper_limit_nsigma must have the same length as t_obs."
+                )
+        object.__setattr__(self, "is_upper_limit", upper)
+        object.__setattr__(self, "upper_limit_nsigma", nsigma)
 
     def __call__(self, sample_vec: np.ndarray) -> float:
         lp = self.prior.lnprior(sample_vec)
@@ -1708,16 +1794,40 @@ class _FitLnProb:
         except NonPhysicalModelError:
             return -np.inf
 
+        y_mod = np.asarray(y_mod, float).reshape(-1)
+        if y_mod.size != np.asarray(self.t_obs).size:
+            return -np.inf
         if np.any(~np.isfinite(y_mod)):
             return -np.inf
 
-        return lp + lp_phys + gaussian_lnlike_with_nuisance(
-            y_kind=self.likelihood_y_kind,
-            y_obs=self.y_obs,
-            y_model=y_mod,
-            y_err=self.y_err,
-            nuisance_params=_likelihood_nuisance_values(vals, self.nuisance_cfgs),
-        )
+        upper = np.asarray(self.is_upper_limit, bool)
+        detection = ~upper
+
+        lnlike_detection = 0.0
+        if np.any(detection):
+            lnlike_detection = gaussian_lnlike_with_nuisance(
+                y_kind=self.likelihood_y_kind,
+                y_obs=self.y_obs[detection],
+                y_model=y_mod[detection],
+                y_err=self.y_err[detection],
+                nuisance_params=_likelihood_nuisance_values(vals, self.nuisance_cfgs),
+            )
+            if not np.isfinite(lnlike_detection):
+                return -np.inf
+
+        lnlike_upper = 0.0
+        if np.any(upper):
+            lnlike_upper = upper_limit_gaussian_cdf_lnlike(
+                y_kind=self.likelihood_y_kind,
+                y_limit=self.y_obs[upper],
+                y_model=y_mod[upper],
+                y_err=self.y_err[upper],
+                upper_limit_nsigma=self.upper_limit_nsigma[upper],
+            )
+            if not np.isfinite(lnlike_upper):
+                return -np.inf
+
+        return lp + lp_phys + lnlike_detection + lnlike_upper
 
 
 def _run_sampler(
@@ -2054,14 +2164,43 @@ def fit_multiband(
     t_obs = _as_1d_float(data.t_days, "data.t_days")
     y_obs = _as_1d_float(data.y, "data.y")
     y_err = _as_1d_float(data.yerr, "data.yerr")
+    upper_raw = getattr(data, "is_upper_limit", None)
+    is_upper_limit = (
+        np.zeros(t_obs.size, dtype=bool)
+        if upper_raw is None
+        else np.asarray(upper_raw, bool).reshape(-1)
+    )
+    nsigma_raw = getattr(data, "upper_limit_nsigma", None)
+    upper_limit_nsigma = (
+        np.full(t_obs.size, np.nan, dtype=float)
+        if nsigma_raw is None
+        else np.asarray(nsigma_raw, float).reshape(-1)
+    )
 
     # Keep band case; only strip whitespace.
     band = np.asarray([normalize_band_label(b) for b in np.asarray(data.band).reshape(-1)], dtype=object)
 
-    _check_same_length(t_days=t_obs, band=band, y=y_obs, yerr=y_err)
+    _check_same_length(
+        t_days=t_obs,
+        band=band,
+        y=y_obs,
+        yerr=y_err,
+        is_upper_limit=is_upper_limit,
+        upper_limit_nsigma=upper_limit_nsigma,
+    )
 
-    _validate_fit_time_and_errors(t_obs, y_err)
-    _validate_multiband_fit_y(y_obs, y_kind=ctx.y_kind)
+    if np.any(~np.isfinite(t_obs)):
+        raise ValueError("data.t_days must be finite.")
+    _validate_multiband_fit_errors(
+        y_err,
+        is_upper_limit,
+        upper_limit_nsigma,
+    )
+    _validate_multiband_fit_y(
+        y_obs,
+        y_kind=ctx.y_kind,
+        is_upper_limit=is_upper_limit,
+    )
 
     # ---- bounds/prior ----
     priors_model, fixed_model, nuisance_cfgs = _split_likelihood_nuisance_fit_inputs(
@@ -2149,6 +2288,8 @@ def fit_multiband(
         predictor=predictor,
         likelihood_y_kind=ctx.y_kind,
         nuisance_cfgs=nuisance_cfgs,
+        is_upper_limit=is_upper_limit,
+        upper_limit_nsigma=upper_limit_nsigma,
     )
 
     samples, logp, meta, sampler_used = _run_sampler(
@@ -2175,6 +2316,27 @@ def fit_multiband(
                 [n for n, log_flag in zip(names_samp, log_flags_samp) if log_flag]
             ),
             likelihood=_fit_likelihood_name(nuisance_cfgs),
+            upper_limit_likelihood="gaussian_cdf",
+            upper_limit_default_nsigma=DEFAULT_UPPER_LIMIT_NSIGMA,
+            n_detections=int(np.sum(~is_upper_limit)),
+            n_upper_limits=int(np.sum(is_upper_limit)),
+            n_upper_limits_with_error=int(
+                np.sum(is_upper_limit & np.isfinite(y_err))
+            ),
+            n_upper_limits_with_nsigma=int(
+                np.sum(
+                    is_upper_limit
+                    & ~np.isfinite(y_err)
+                    & np.isfinite(upper_limit_nsigma)
+                )
+            ),
+            n_upper_limits_default_nsigma=int(
+                np.sum(
+                    is_upper_limit
+                    & ~np.isfinite(y_err)
+                    & ~np.isfinite(upper_limit_nsigma)
+                )
+            ),
             sed=sed_config["name"],
             sed_config=sed_config,
             interp_fill_fit=interp_fill_fit,

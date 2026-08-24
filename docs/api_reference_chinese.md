@@ -123,7 +123,15 @@ tf.BolometricData(t_days, y, yerr, mask=None)
 ### `MultiBandData`
 
 ```python
-tf.MultiBandData(t_days, band, y, yerr, mask=None)
+tf.MultiBandData(
+    t_days,
+    band,
+    y,
+    yerr,
+    mask=None,
+    is_upper_limit=None,
+    upper_limit_nsigma=None,
+)
 ```
 
 | 字段 | 含义 |
@@ -133,6 +141,48 @@ tf.MultiBandData(t_days, band, y, yerr, mask=None)
 | `y` | 若 `y_kind="mag"` 则为星等；若 `y_kind="flux"` 则为 flux density |
 | `yerr` | 与 `y` 同单位的一倍标准差误差 |
 | `mask` | 可选布尔 mask；只有 mask 选中的点会进入拟合 |
+| `is_upper_limit` | 可选布尔标记；`True` 表示该行是非探测上限 |
+| `upper_limit_nsigma` | 可选标量或逐行数组；填写每个 upper limit 是 `3σ`、`5σ` 等 |
+
+对于 upper-limit 数据行，把论文给出的 limiting magnitude 或 flux 放在
+`y` 中。误差信息有三种写法：
+
+1. 已知一倍标准差噪声：把它放在该行的 `yerr`，并让
+   `upper_limit_nsigma=np.nan`。
+2. 论文说明该 limit 是 `3σ` 或 `5σ`：把该行的
+   `upper_limit_nsigma` 设为 `3` 或 `5`，并设 `yerr=np.nan`。
+3. 只有 limit，没有误差或显著度：两者都留空，TransFit 默认按 `5σ`。
+
+同一个 upper-limit 行不能同时提供 `yerr` 和 `upper_limit_nsigma`，否则会
+报错。detection 行必须提供有限且为正的 `yerr`，且不使用
+`upper_limit_nsigma`。
+
+upper limit 在 flux 空间使用单边 Gaussian CDF likelihood：
+
+```math
+\ln \mathcal{L}_{\rm UL}
+=
+\ln \Phi\!\left(\frac{F_{\rm lim}-F_{\rm model}}{\sigma_F}\right).
+```
+
+对于一个 `nσ` limit，TransFit 使用 `sigma_F = F_lim / n`。对于 magnitude
+数据，代码直接用模型与 limit 的星等差计算 flux ratio，因此星等零点会
+抵消。如果 magnitude upper limit 提供了有限的 `yerr`，则在 limit 处把它
+局部换算为相对 flux 误差。
+
+```python
+data = tf.MultiBandData(
+    t_days=np.array([-5.0, 0.0, 5.0]),
+    band=np.array(["r", "r", "r"]),
+    y=np.array([21.5, 20.1, 18.7]),
+    yerr=np.array([np.nan, 0.1, 0.05]),
+    is_upper_limit=np.array([True, False, False]),
+    upper_limit_nsigma=np.array([3.0, np.nan, np.nan]),
+)
+```
+
+`fit_multiband()` 不需要新增参数。拟合结果的 metadata 会记录 CDF 约定、
+显式 `nσ` 的使用情况、默认 `5σ` 假设以及 detection/upper-limit 数量。
 
 ## 正向计算和预测
 

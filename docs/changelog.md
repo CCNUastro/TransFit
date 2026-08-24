@@ -4,7 +4,115 @@
   <strong>Language:</strong> English | <a href="changelog_chinese.md">简体中文</a>
 </p>
 
-User-visible changes are recorded here, with the newest version first.
+## v0.3
+
+### Upper limits in multi-band fitting
+
+- `MultiBandData` now accepts row-aligned `is_upper_limit` and
+  `upper_limit_nsigma` fields.
+- Detections retain the existing Gaussian likelihood. Non-detections use a
+  one-sided Gaussian-CDF likelihood in flux space:
+
+```math
+\ln \mathcal{L}_{\rm UL}
+=
+\ln \Phi\!\left(\frac{F_{\rm lim}-F_{\rm model}}{\sigma_F}\right).
+```
+
+- When a paper identifies an upper limit as 3 sigma, 5 sigma, or another
+  significance, enter that number in `upper_limit_nsigma`. If the paper gives
+  only the limit, leave this field unset and TransFit will use its default
+  5-sigma setting.
+- `sigma_int` continues to affect detections only. Upper-limit points are shown
+  as downward triangles in multi-band fit plots.
+- No new `fit_multiband()` argument is required; all upper-limit information
+  stays with the corresponding rows in `MultiBandData`.
+
+### Public API and usage
+
+```python
+tf.MultiBandData(
+    t_days,
+    band,
+    y,
+    yerr,
+    mask=None,
+    is_upper_limit=None,
+    upper_limit_nsigma=None,
+)
+```
+
+For each upper-limit row, store the reported limiting magnitude or flux in
+`y`. The uncertainty convention is:
+
+| Available information | `yerr` | `upper_limit_nsigma` |
+|---|---:|---:|
+| measured one-sigma noise | positive value | `np.nan` |
+| reported 3-sigma or 5-sigma limit | `np.nan` | `3.0` or `5.0` |
+| limit only | `np.nan` | `np.nan` (defaults to 5 sigma) |
+
+Detections require a finite positive `yerr` and use `np.nan` for
+`upper_limit_nsigma`. Providing both uncertainty fields for the same
+upper-limit row raises `ValueError`.
+
+Example with 5-sigma and 3-sigma magnitude limits:
+
+```python
+import numpy as np
+import transfit as tf
+
+data = tf.MultiBandData(
+    t_days=np.array([-8, -4, 0, 5, 12, -6, 1, 8], dtype=float),
+    band=np.array(["B", "B", "B", "B", "B", "V", "V", "V"]),
+    y=np.array([21.7, 21.5, 20.4, 18.8, 19.5, 21.2, 20.1, 19.0]),
+    yerr=np.array([
+        np.nan, np.nan,
+        0.12, 0.08, 0.10,
+        np.nan,
+        0.10, 0.08,
+    ]),
+    is_upper_limit=np.array([
+        True, True,
+        False, False, False,
+        True,
+        False, False,
+    ]),
+    upper_limit_nsigma=np.array([
+        5.0, 3.0,
+        np.nan, np.nan, np.nan,
+        5.0,
+        np.nan, np.nan,
+    ]),
+)
+
+result = tf.fit_multiband(
+    data=data,
+    model="nickel",
+    z=0.01,
+    filters=filters,
+    y_kind="mag",
+    priors=priors,
+    fixed=fixed,
+)
+```
+
+When every upper limit has the same significance, a scalar is accepted and is
+applied only to rows where `is_upper_limit=True`:
+
+```python
+data = tf.MultiBandData(
+    t_days=t_days,
+    band=band,
+    y=y,
+    yerr=yerr,
+    is_upper_limit=is_upper_limit,
+    upper_limit_nsigma=5.0,
+)
+```
+
+Fit metadata records the number of detections, limits using measured errors,
+limits using explicit `n`-sigma values, and limits using the default 5-sigma
+interpretation.
 
 ## v0.2
 
