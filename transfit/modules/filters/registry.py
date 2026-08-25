@@ -6,65 +6,176 @@ from .core import FilterProfile
 
 
 _BUILTIN_FILTERS: Dict[str, Dict[str, object]] = {
+    "johnson_cousins.U": {
+        "kind": "mono",
+        "nu_eff_hz": 8.44e14,
+        "zero_points_jy": {"vega": 1438.73},
+        "meta": {
+            "family": "Johnson-Cousins",
+            "svo_fps_id": "Generic/Johnson.U",
+        },
+    },
     "johnson_cousins.B": {
         "kind": "mono",
         "nu_eff_hz": 6.80e14,
         "zero_points_jy": {"vega": 4260.0},
-        "meta": {"family": "Johnson-Cousins"},
+        "meta": {
+            "family": "Johnson-Cousins",
+            "svo_fps_id": "Generic/Johnson.B",
+        },
     },
     "johnson_cousins.V": {
         "kind": "mono",
         "nu_eff_hz": 5.50e14,
         "zero_points_jy": {"vega": 3640.0},
-        "meta": {"family": "Johnson-Cousins"},
+        "meta": {
+            "family": "Johnson-Cousins",
+            "svo_fps_id": "Generic/Johnson.V"
+        },
     },
     "johnson_cousins.R": {
         "kind": "mono",
         "nu_eff_hz": 4.70e14,
         "zero_points_jy": {"vega": 3080.0},
-        "meta": {"family": "Johnson-Cousins"},
+        "meta": {
+            "family": "Johnson-Cousins",
+            "svo_fps_id": "Generic/Cousins.R"
+        },
     },
     "johnson_cousins.I": {
         "kind": "mono",
         "nu_eff_hz": 3.90e14,
         "zero_points_jy": {"vega": 2550.0},
-        "meta": {"family": "Johnson-Cousins"},
+        "meta": {
+            "family": "Johnson-Cousins",
+            "svo_fps_id": "Generic/Cousins.I"
+        },
+    },
+    "sdss.u": {
+        "kind": "mono",
+        "nu_eff_hz": 8.42e+14,
+        "zero_points_jy": {},
+        "meta": {
+            "family": "SDSS",
+            "svo_fps_id": "SLOAN/SDSS.u"
+        },
     },
     "sdss.g": {
         "kind": "mono",
-        "nu_eff_hz": 6.29e14,
+        "nu_eff_hz": 6.35e+14,
         "zero_points_jy": {},
-        "meta": {"family": "SDSS"},
+        "meta": {
+            "family": "SDSS",
+            "svo_fps_id": "SLOAN/SDSS.g"
+        },
     },
     "sdss.r": {
         "kind": "mono",
-        "nu_eff_hz": 4.81e14,
+        "nu_eff_hz": 4.85e+14,
         "zero_points_jy": {},
-        "meta": {"family": "SDSS"},
+        "meta": {
+            "family": "SDSS",
+            "svo_fps_id": "SLOAN/SDSS.r"
+        },
     },
     "sdss.i": {
         "kind": "mono",
-        "nu_eff_hz": 3.93e14,
+        "nu_eff_hz": 4.00e+14,
         "zero_points_jy": {},
-        "meta": {"family": "SDSS"},
+        "meta": {
+            "family": "SDSS",
+            "svo_fps_id": "SLOAN/SDSS.i"
+        },
+    },
+    "sdss.z": {
+        "kind": "mono",
+        "nu_eff_hz": 3.35e+14,
+        "zero_points_jy": {},
+        "meta": {
+            "family": "SDSS",
+            "svo_fps_id": "SLOAN/SDSS.z"
+        },
     },
     "ztf.g": {
         "kind": "mono",
-        "nu_eff_hz": 6.38e14,
+        "nu_eff_hz": 6.25e14,
         "zero_points_jy": {},
-        "meta": {"family": "ZTF"},
+        "meta": {
+            "family": "ZTF",
+            "svo_fps_id": "Palomar/ZTF.g"
+        },
     },
     "ztf.r": {
         "kind": "mono",
-        "nu_eff_hz": 4.84e14,
+        "nu_eff_hz": 4.66e14,
         "zero_points_jy": {},
-        "meta": {"family": "ZTF"},
+        "meta": {
+            "family": "ZTF",
+            "svo_fps_id": "Palomar/ZTF.r"
+        },
     },
     "ztf.i": {
         "kind": "mono",
         "nu_eff_hz": 3.80e14,
         "zero_points_jy": {},
-        "meta": {"family": "ZTF"},
+        "meta": {
+            "family": "ZTF",
+            "svo_fps_id": "Palomar/ZTF.i"
+        },
+    },
+        "lsst.u": {
+        "kind": "mono",
+        "nu_eff_hz": 8.14e+14,
+        "zero_points_jy": {},
+        "meta": {
+            "family": "LSST",
+            "svo_fps_id": "LSST/LSST.u"
+        }
+    },
+    "lsst.g": {
+        "kind": "mono",
+        "nu_eff_hz": 6.24e+14,
+        "zero_points_jy": {},
+        "meta": {
+            "family": "LSST",
+            "svo_fps_id": "LSST/LSST.g"
+        }
+    },
+    "lsst.r": {
+        "kind": "mono",
+        "nu_eff_hz": 4.81e+14,
+        "zero_points_jy": {},
+        "meta": {
+            "family": "LSST",
+            "svo_fps_id": "LSST/LSST.r"
+        }
+    },
+    "lsst.i": {
+        "kind": "mono",
+        "nu_eff_hz": 3.98e+14,
+        "zero_points_jy": {},
+        "meta": {
+            "family": "LSST",
+            "svo_fps_id": "LSST/LSST.i"
+        }
+    },
+    "lsst.z": {
+        "kind": "mono",
+        "nu_eff_hz": 3.45e+14,
+        "zero_points_jy": {},
+        "meta": {
+            "family": "LSST",
+            "svo_fps_id": "LSST/LSST.z"
+        }
+    },
+    "lsst.y": {
+        "kind": "mono",
+        "nu_eff_hz": 3.08e+14,
+        "zero_points_jy": {},
+        "meta": {
+            "family": "LSST",
+            "svo_fps_id": "LSST/LSST.y"
+        }
     },
 }
 
