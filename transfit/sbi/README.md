@@ -29,9 +29,9 @@ posterior = tf.sbi.train_sbi(
     z=0.01,
     distance_modulus=30.0,
     filters={"B": "johnson_cousins.B", "V": "johnson_cousins.V"},
-    priors={"M_ej": (1.0, 8.0), "v_ej": (0.3, 2.0), "M_Ni": (0.01, 0.5)},
+    priors={"M_ej": (1.0, 8.0), "v_ej": (0.3, 2.0), "M_ni": (0.01, 0.5)},
     fixed={"kappa": 0.2, "kappa_gamma": 0.03, "R_0": 10.0, "T_floor": 5000.0,
-           "x_Ni": 0.5, "E_Th_in": 0.0, "t_shift": 0.0},
+           "f_ni": 0.5, "E_Th_in": 0.0, "t_shift": 0.0, "delta": 0.0, "n": 10.0},
     bands_pool=["B", "V"],
     n_simulations=5000,
     max_num_epochs=100,
@@ -186,7 +186,7 @@ transfit/sbi/
 │     │      │              theta_i ──> _param_values_from_sample() │
 │     │      │                  ──> _physical_constraints_lnprior() │
 │     │      │                      不通过? → NaN, continue          │
-│     │      │                  ──> _assemble_theta_from_values()   │
+│     │      │                  ──> _assemble_model_params_from_values()   │
 │     │      │                      ──> (theta_model, t_shift)      │
 │     │      │                  ──> predict_bol / predict_multiband │
 │     │      │                      ──> y (光变曲线)                 │

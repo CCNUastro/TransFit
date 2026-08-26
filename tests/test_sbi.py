@@ -35,11 +35,11 @@ def nickel_prior():
     priors_lin, priors_log10 = _split_prior_specs({
         "M_ej": (1.0, 8.0),
         "v_ej": (0.3, 2.0),
-        "M_Ni": (0.01, 0.5),
+        "M_ni": (0.01, 0.5),
     })
     names_all, bounds_all = build_bounds("nickel", priors=priors_lin, include_t_shift=True)
     bounds_all, log_set_all = _apply_log10_priors(names_all, bounds_all, priors_log10)
-    fixed = {"x_Ni": 0.5, "kappa_gamma": 0.03, "kappa": 0.2, "R_0": 10.0, "E_Th_in": 0.0, "T_floor": 5000.0, "t_shift": 0.0}
+    fixed = {"f_ni": 0.5, "kappa_gamma": 0.03, "kappa": 0.2, "R_0": 10.0, "E_Th_in": 0.0, "T_floor": 5000.0, "t_shift": 0.0, "delta": 0.0, "n": 10.0}
     names_samp, bounds_samp, fixed_dict = _split_sampling(names_all, bounds_all, fixed=fixed)
     log_flags_samp = [n in log_set_all for n in names_samp]
     return MixedBoundsPrior(bounds=bounds_samp, param_names=names_samp, log_flags=log_flags_samp), names_samp, names_all, fixed_dict
@@ -359,10 +359,10 @@ class TestTrainSBIE2E:
             priors={
                 "M_ej": (1.0, 8.0),
                 "v_ej": (0.3, 2.0),
-                "M_Ni": (0.01, 0.5),
+                "M_ni": (0.01, 0.5),
             },
             fixed={
-                "x_Ni": 0.5, "kappa_gamma": 0.03, "kappa": 0.2,
+                "f_ni": 0.5, "kappa_gamma": 0.03, "kappa": 0.2,
                 "R_0": 10.0, "E_Th_in": 0.0, "T_floor": 5000.0, "t_shift": 0.0,
             },
             n_simulations=200,
@@ -410,10 +410,10 @@ class TestTrainSBIE2E:
             priors={
                 "M_ej": (1.0, 8.0),
                 "v_ej": (0.3, 2.0),
-                "M_Ni": (0.01, 0.5),
+                "M_ni": (0.01, 0.5),
             },
             fixed={
-                "x_Ni": 0.5, "kappa_gamma": 0.03, "kappa": 0.2,
+                "f_ni": 0.5, "kappa_gamma": 0.03, "kappa": 0.2,
                 "R_0": 10.0, "E_Th_in": 0.0, "T_floor": 5000.0, "t_shift": 0.0,
             },
             n_simulations=200,
@@ -463,7 +463,7 @@ class TestIO:
 
         post = SBIPosterior(
             model="nickel",
-            param_names=["M_ej", "v_ej", "M_Ni"],
+            param_names=["M_ej", "v_ej", "M_ni"],
             posterior=MockPosterior(),
             embedding_net=emb,
             meta={"test": True},
@@ -477,7 +477,7 @@ class TestIO:
 
             loaded = load_posterior(path, trusted=True)
             assert loaded.model == "nickel"
-            assert loaded.param_names == ["M_ej", "v_ej", "M_Ni"]
+            assert loaded.param_names == ["M_ej", "v_ej", "M_ni"]
             assert loaded.mode == "bolometric"
             assert loaded.posterior is None
             assert loaded.meta["posterior_serialized"] is False
@@ -521,7 +521,7 @@ class TestPosteriorDevice:
         mock = MockPosterior()
         post = SBIPosterior(
             model="nickel",
-            param_names=["M_ej", "v_ej", "M_Ni"],
+            param_names=["M_ej", "v_ej", "M_ni"],
             posterior=mock,
             embedding_net=emb,
             mode="bolometric",
@@ -563,7 +563,7 @@ class TestPosteriorDevice:
 
         post = SBIPosterior(
             model="nickel",
-            param_names=["M_ej", "v_ej", "M_Ni"],
+            param_names=["M_ej", "v_ej", "M_ni"],
             posterior=MockPosterior(),
             embedding_net=emb,
             mode="bolometric",

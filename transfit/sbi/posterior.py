@@ -126,7 +126,9 @@ class SBIPosterior:
         samples : np.ndarray, shape (n, ndim)
         """
         posterior = self._require_posterior()
-        x_encoded = self._encode_observation(y_obs, t_days=t_days, band=band)
+        x_encoded = self._encode_observation(
+            y_obs, t_days=t_days, band=band, mask=mask
+        )
         if seed is not None:
             torch.manual_seed(seed)
             if self.device.type == "cuda":
@@ -197,6 +199,7 @@ class SBIPosterior:
         *,
         t_days: Optional[np.ndarray] = None,
         band: Optional[np.ndarray] = None,
+        mask: Optional[np.ndarray] = None,
     ) -> torch.Tensor:
         """Encode a single observation into raw features for the embedding network.
 
@@ -217,8 +220,13 @@ class SBIPosterior:
                 band_vocabulary=self.band_vocabulary,
                 t_range=self.t_range,
             )
-            # Append validity indicator column (all 1.0, no padding)
-            validity = np.ones((features.shape[0], 1), dtype=np.float32)
+            if mask is None:
+                validity = np.ones((features.shape[0], 1), dtype=np.float32)
+            else:
+                mask_array = np.asarray(mask, bool).reshape(-1)
+                if len(mask_array) != features.shape[0]:
+                    raise ValueError("mask and y_obs must have the same length.")
+                validity = mask_array.astype(np.float32).reshape(-1, 1)
             features_with_mask = np.concatenate([features, validity], axis=1)
             # Shape: (1, n_obs, feature_dim+1)
             return self._pad_encoded_observation(torch.as_tensor(

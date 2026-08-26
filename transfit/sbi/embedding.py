@@ -114,6 +114,8 @@ def encode_observations(
 
     if t_days is not None:
         t_days = np.asarray(t_days, float).reshape(-1)
+        if len(t_days) != n_obs:
+            raise ValueError("t_days and y_values must have the same length.")
         t_lo, t_hi = float(t_range[0]), float(t_range[1])
         if t_hi <= t_lo:
             t_hi = t_lo + 1.0
@@ -121,14 +123,22 @@ def encode_observations(
     else:
         t_norm = np.zeros(n_obs, dtype=float)
 
-    if band is not None and band_vocabulary is not None:
+    if band is not None:
+        if band_vocabulary is None:
+            raise ValueError("band_vocabulary is required when band is provided.")
         band = np.asarray(band, object).reshape(-1)
+        if len(band) != n_obs:
+            raise ValueError("band and y_values must have the same length.")
         n_bands = len(band_vocabulary)
         band_idx = {b: i for i, b in enumerate(band_vocabulary)}
+        unknown = sorted({str(b) for b in band if b not in band_idx})
+        if unknown:
+            raise ValueError(
+                f"Unknown band label(s) {unknown}; trained vocabulary is {band_vocabulary}."
+            )
         onehot = np.zeros((n_obs, n_bands), dtype=float)
         for j, b in enumerate(band):
-            if b in band_idx:
-                onehot[j, band_idx[b]] = 1.0
+            onehot[j, band_idx[b]] = 1.0
         features = np.column_stack([t_norm, onehot, y_values])
     else:
         features = np.column_stack([t_norm, y_values])
@@ -154,6 +164,8 @@ def encode_batch(
         used by SetSummaryNet to automatically infer the mask.
     mask : torch.Tensor, shape (batch, max_n_obs), True for valid entries
     """
+    if not batch_y:
+        raise ValueError("batch_y must contain at least one observation array.")
     encoded = []
     for i, y in enumerate(batch_y):
         td = t_days_list[i] if t_days_list is not None else None

@@ -12,7 +12,7 @@ from ..api import (
     predict_multiband,
     _physical_constraints_lnprior,
     _param_values_from_sample,
-    _assemble_theta_from_values,
+    _assemble_model_params_from_values,
 )
 from ..model_registry import canonical_model_name
 
@@ -24,6 +24,7 @@ def make_bolometric_simulator(
     t_days: np.ndarray,
     noise_sigma: Optional[float] = None,
     noise_model: Optional[Callable] = None,
+    seed: Optional[int] = None,
     Nx: int = 20,
     Ny: int = 50,
     t_max_days: float = 150.0,
@@ -59,6 +60,7 @@ def make_bolometric_simulator(
 
     model = canonical_model_name(model, warn_legacy=False)
     t_days_np = np.asarray(t_days, float).copy()
+    rng = np.random.default_rng(seed)
 
     def simulator(theta: torch.Tensor) -> torch.Tensor:
         theta_np = np.asarray(theta.detach().cpu().numpy(), float)
@@ -73,22 +75,23 @@ def make_bolometric_simulator(
                 vals = _param_values_from_sample(
                     theta_np[i], param_names, fixed
                 )
-                lp_phys = _physical_constraints_lnprior(vals)
+                lp_phys = _physical_constraints_lnprior(vals, model=model)
                 if not np.isfinite(lp_phys):
                     continue
 
-                theta_model, t_shift = _assemble_theta_from_values(vals, names_all)
+                model_params, t_shift = _assemble_model_params_from_values(
+                    vals, names_all
+                )
                 t_eval = t_days_np + t_shift
 
                 y = predict_bol(
                     model=model,
-                    theta=theta_model,
+                    params=model_params,
                     z=z,
                     t_days=t_eval,
-                    Nx=Nx,
-                    Ny=Ny,
                     t_max_days=t_max_days,
                     interp_fill="nan",
+                    solver_kwargs={"Nx": Nx, "Ny": Ny},
                 )
 
                 if np.any(~np.isfinite(y)):
@@ -100,9 +103,11 @@ def make_bolometric_simulator(
                 if noise_model is not None:
                     y_out = noise_model(y_out)
                 elif noise_sigma is not None and noise_sigma > 0:
-                    y_out = y_out + np.random.randn(len(y_out)) * noise_sigma
+                    y_out = y_out + rng.normal(0.0, noise_sigma, size=len(y_out))
 
                 outputs[i] = y_out
+            except (ImportError, AttributeError, TypeError):
+                raise
             except Exception:
                 continue
 
@@ -124,6 +129,7 @@ def make_multiband_simulator(
     extinction=None,
     noise_sigma: Optional[float] = None,
     noise_model: Optional[Callable] = None,
+    seed: Optional[int] = None,
     Nx: int = 20,
     Ny: int = 50,
     t_max_days: float = 150.0,
@@ -173,6 +179,7 @@ def make_multiband_simulator(
     t_days_np = np.asarray(t_days, float).copy()
     band_np = np.asarray(band, object).copy()
     n_obs = len(t_days_np)
+    rng = np.random.default_rng(seed)
 
     def simulator(theta: torch.Tensor) -> torch.Tensor:
         theta_np = np.asarray(theta.detach().cpu().numpy(), float)
@@ -187,16 +194,18 @@ def make_multiband_simulator(
                 vals = _param_values_from_sample(
                     theta_np[i], param_names, fixed
                 )
-                lp_phys = _physical_constraints_lnprior(vals)
+                lp_phys = _physical_constraints_lnprior(vals, model=model)
                 if not np.isfinite(lp_phys):
                     continue
 
-                theta_model, t_shift = _assemble_theta_from_values(vals, names_all)
+                model_params, t_shift = _assemble_model_params_from_values(
+                    vals, names_all
+                )
                 t_eval = t_days_np + t_shift
 
                 y = predict_multiband(
                     model=model,
-                    theta=theta_model,
+                    params=model_params,
                     z=z,
                     distance_modulus=distance_modulus,
                     filters=filters,
@@ -205,10 +214,9 @@ def make_multiband_simulator(
                     y_kind=y_kind,
                     mag_system=mag_system,
                     extinction=extinction,
-                    Nx=Nx,
-                    Ny=Ny,
                     t_max_days=t_max_days,
                     interp_fill="nan",
+                    solver_kwargs={"Nx": Nx, "Ny": Ny},
                 )
 
                 if np.any(~np.isfinite(y)):
@@ -217,9 +225,11 @@ def make_multiband_simulator(
                 if noise_model is not None:
                     y = noise_model(y)
                 elif noise_sigma is not None and noise_sigma > 0:
-                    y = y + np.random.randn(len(y)) * noise_sigma
+                    y = y + rng.normal(0.0, noise_sigma, size=len(y))
 
                 outputs[i] = y
+            except (ImportError, AttributeError, TypeError):
+                raise
             except Exception:
                 continue
 

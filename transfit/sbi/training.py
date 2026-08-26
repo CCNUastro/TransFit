@@ -124,7 +124,7 @@ def _generate_sequential(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     rng = np.random.default_rng(seed)
     # Draw all theta at once
-    theta_all = prior.sample((n_simulations,))
+    theta_all = prior.sample_with_rng((n_simulations,), rng=rng)
 
     # Simulate in chunks for memory efficiency and progress
     chunk_size = min(500, n_simulations)
@@ -158,7 +158,7 @@ def _generate_parallel(
     from joblib import Parallel, delayed
 
     rng = np.random.default_rng(seed)
-    theta_all = prior.sample((n_simulations,))
+    theta_all = prior.sample_with_rng((n_simulations,), rng=rng)
 
     chunk_size = max(1, n_simulations // n_workers)
     chunks = []

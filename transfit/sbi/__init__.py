@@ -11,6 +11,7 @@ infer_sbi : Quick inference helper (wraps SBIPosterior.sample).
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -21,6 +22,9 @@ from ..api import (
     _split_prior_specs,
     _apply_log10_priors,
     _split_sampling,
+    _apply_default_fixed_model_params,
+    _validate_fixed_physical_constraints,
+    _validate_sampling_bounds_physical_constraints,
 )
 from ..model_registry import canonical_model_name
 from ..priors import build_bounds, MixedBoundsPrior
@@ -146,18 +150,35 @@ def train_sbi(
     SBIPosterior
         Trained posterior object.
     """
-    from sbi.inference import SNPE
+    try:
+        from sbi.inference import NPE_C as SNPE
+    except ImportError:  # sbi < 0.27
+        from sbi.inference import SNPE
     from sbi.neural_nets import posterior_nn
 
     model = canonical_model_name(model, warn_legacy=False)
+    mode = str(mode).strip().lower()
+    if mode not in {"bolometric", "multiband"}:
+        raise ValueError("mode must be 'bolometric' or 'multiband'.")
+    if int(n_simulations) <= 0:
+        raise ValueError("n_simulations must be a positive integer.")
     z_val = float(z or 0.0)
     train_device = _resolve_sbi_device(device)
 
     # ---- Build prior ----
+    fixed_model = _apply_default_fixed_model_params(
+        model,
+        priors,
+        fixed,
+    )
     priors_lin, priors_log10 = _split_prior_specs(priors)
     names_all, bounds_all = build_bounds(model, priors=priors_lin, include_t_shift=True)
     bounds_all, log_set_all = _apply_log10_priors(names_all, bounds_all, priors_log10)
-    names_samp, bounds_samp, fixed_dict = _split_sampling(names_all, bounds_all, fixed=fixed)
+    _validate_sampling_bounds_physical_constraints(names_all, bounds_all)
+    names_samp, bounds_samp, fixed_dict = _split_sampling(
+        names_all, bounds_all, fixed=fixed_model
+    )
+    _validate_fixed_physical_constraints(fixed_dict, model=model)
     log_flags_samp = [n in log_set_all for n in names_samp]
     mixed_prior = MixedBoundsPrior(
         bounds=bounds_samp, param_names=names_samp, log_flags=log_flags_samp
@@ -198,8 +219,9 @@ def train_sbi(
 
     # Distribute simulations across cadence templates
     n_templates = len(cadence_templates)
-    sims_per_template = max(1, n_simulations // n_templates)
-    n_extra = n_simulations - sims_per_template * n_templates
+    if n_templates == 0:
+        raise ValueError("cadence_templates must contain at least one template.")
+    sims_per_template, n_extra = divmod(int(n_simulations), n_templates)
 
     for t_idx, tmpl in enumerate(cadence_templates):
         n_sims = sims_per_template + (1 if t_idx < n_extra else 0)
@@ -216,6 +238,7 @@ def train_sbi(
             sim = make_bolometric_simulator(
                 model=model, z=z_val, t_days=t_days_tmpl,
                 noise_sigma=noise_sigma, noise_model=noise_model,
+                seed=seed + t_idx,
                 Nx=Nx, Ny=Ny, t_max_days=t_max_days,
                 param_names=names_samp, names_all=names_all, fixed=fixed_dict,
             )
@@ -227,6 +250,7 @@ def train_sbi(
                 y_kind=y_kind, mag_system=mag_system,
                 extinction=extinction,
                 noise_sigma=noise_sigma, noise_model=noise_model,
+                seed=seed + t_idx,
                 Nx=Nx, Ny=Ny, t_max_days=t_max_days,
                 param_names=names_samp, names_all=names_all, fixed=fixed_dict,
             )
@@ -236,9 +260,9 @@ def train_sbi(
             simulator=sim,
             prior=tf_prior,
             n_simulations=n_sims,
-            n_workers=n_workers if t_idx == 0 else 1,  # parallel only for first
+            n_workers=n_workers,
             seed=seed + t_idx,
-            cache_path=None,
+            cache_path=_cadence_cache_path(cache_path, t_idx, n_templates),
             show_progress=show_progress and t_idx == 0,
         )
         if len(theta_batch) == 0:
@@ -396,6 +420,18 @@ def _generate_random_cadences(
         cadences.append(tmpl)
 
     return cadences
+
+
+def _cadence_cache_path(
+    cache_path: Optional[str],
+    cadence_index: int,
+    n_templates: int,
+) -> Optional[str]:
+    if cache_path is None or n_templates == 1:
+        return cache_path
+    path = Path(cache_path)
+    suffix = path.suffix or ".npz"
+    return str(path.with_name(f"{path.stem}.cadence-{cadence_index}{suffix}"))
 
 
 def _resolve_sbi_device(device: Optional[str]) -> torch.device:

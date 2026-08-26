@@ -31,6 +31,8 @@ interaction models.
   extinction, and SED handling.
 - Bayesian fitting through a consistent result object, with `emcee` installed
   by default and optional `zeus` and `dynesty` backends.
+- Optional simulation-based inference (SBI) for amortized neural posterior
+  estimation.
 
 ## Installation
 
@@ -53,6 +55,16 @@ Install optional sampler backends with:
 ```bash
 python -m pip install "transfit[all-samplers]"
 ```
+
+For SBI development and its notebook dependencies:
+
+```bash
+python -m pip install -e ".[sbi,plot,examples]"
+```
+
+The end-to-end [SN 1993J SBI tutorial](examples/tutorial_sbi_sn1993j.ipynb)
+trains an amortized posterior on the bolometric cadence in
+`examples/data/sn1993j_lbol.txt`.
 
 ## Quick Start
 

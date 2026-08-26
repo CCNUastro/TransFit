@@ -33,3 +33,7 @@ results/
 *.log
 *.zip
 Transfit_v*/
+*.pt
+sbi-logs/
+
+AGENTS.md

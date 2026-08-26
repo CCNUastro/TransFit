@@ -61,11 +61,22 @@ class TransFitPrior(Distribution):
         return self
 
     def sample(self, sample_shape=torch.Size()):
-        n = 1
-        if len(sample_shape) > 0:
-            n = int(sample_shape[0])
-        samples = self._prior.sample(n)
-        return torch.as_tensor(samples, dtype=torch.float32, device=self._device)
+        return self.sample_with_rng(sample_shape)
+
+    def sample_with_rng(
+        self,
+        sample_shape=torch.Size(),
+        *,
+        rng: Optional[np.random.Generator] = None,
+    ):
+        sample_shape = torch.Size(sample_shape)
+        n = int(np.prod(sample_shape)) if sample_shape else 1
+        samples = torch.as_tensor(
+            self._prior.sample(n, rng=rng),
+            dtype=torch.float32,
+            device=self._device,
+        )
+        return samples.reshape(sample_shape + self.event_shape)
 
     def log_prob(self, value):
         """Vectorized log-probability.
