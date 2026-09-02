@@ -373,6 +373,11 @@ res = tf.fit_multiband(
 `fixed` 是参数名到固定值的映射。一般情况下，没有放在 `fixed` 里的模型参数会被采样，
 其范围来自默认边界或 `priors` 中用户给出的边界。
 
+Nickel 拟合默认执行 `M_ni <= f_ni*M_ej`。如果只做显式的无约束诊断实验，
+可以向 `fit_bol`、`fit_multiband`、相应的正向/预测函数或
+`transfit.sbi.train_sbi` 传入 `enforce_ni_mixing_constraint=False`。
+这会允许混合区域内的形式镍质量分数超过 1，因此所得参数不能解释为物理有效的组分。
+
 `T_floor` 只有一个有意保留的例外：`fit_bol` 不包含它。Nickel 多波段拟合中，
 `T_floor` 遵循普通拟合参数规则：如果没有放入 `fixed` 或 `priors`，就使用默认
 范围 1000--10000 K 参与采样；如果想固定为 4500 K 等具体值，就放入 `fixed`。正向计算的

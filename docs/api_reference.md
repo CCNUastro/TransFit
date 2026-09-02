@@ -399,6 +399,13 @@ and `hi` are bounds in log10 space.
 supplied in `fixed` are sampled using their default bounds or the bounds supplied
 in `priors`.
 
+Nickel fits enforce `M_ni <= f_ni*M_ej` by default. For an explicitly
+unconstrained diagnostic experiment, pass
+`enforce_ni_mixing_constraint=False` to `fit_bol`, `fit_multiband`, the
+corresponding forward/prediction helper, or `transfit.sbi.train_sbi`. This
+permits a formal nickel mass fraction greater than one inside the mixed region
+and should not be interpreted as a physically valid composition.
+
 There is one intentional exception for `T_floor`: in `fit_bol`, it is not part
 of the sampled bolometric fit state. In Nickel multi-band fits, `T_floor`
 follows the general fitting rule: if it is omitted from both `fixed` and

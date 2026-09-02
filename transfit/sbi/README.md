@@ -1,5 +1,9 @@
 # transfit.sbi — Simulation-Based Inference
 
+SBI simulations use the production TransFit solver grid by default:
+`Nx=100` and `Ny=1000`. Lower-resolution grids should be selected only
+explicitly for diagnostics or quick smoke tests.
+
 Amortized neural posterior estimation for supernova light-curve parameters using the [sbi](https://sbi-dev.github.io/sbi/) library.
 
 Unlike the MCMC samplers (`emcee`, `zeus`, `dynesty`) that run a sampling loop per observation, the SBI module trains a neural density estimator (Masked Autoregressive Flow + DeepSet embedding) on simulated data upfront. After training, posterior inference on any new observation is near-instant.
@@ -215,12 +219,16 @@ transfit/sbi/
 │
 │  5. 构建 Embedding Net
 │     SetSummaryNet(feature_dim, hidden_features, output_dim)
+│         fit_normalization(x_train): 仅用有效点拟合物理特征的 mean/scale
+│         validity mask 不参与标准化
 │         phi: Linear(feat_dim-1 → hidden) → ReLU → Linear → ReLU
 │         rho: Linear(hidden → hidden) → ReLU → Linear → output_dim
 │         forward 时自动从输入最后一列推断 mask, 忽略 padding
 │
 │  6. 训练 NPE (Neural Posterior Estimation)
-│     density_estimator = posterior_nn("maf", embedding_net, ...)
+│     density_estimator = posterior_nn(
+│         "maf", embedding_net, z_score_x="none", ...
+│     )
 │     SNPE(prior, density_estimator)
 │         .append_simulations(theta_train, x_train)
 │         .train(max_num_epochs, ...)
@@ -253,6 +261,7 @@ transfit/sbi/
 │              SetSummaryNet.forward(x_encoded):
 │                mask = (x_encoded[..., -1] != 0.0)    ← 全 True
 │                features = x_encoded[..., :-1]
+│                features = (features - mean) / scale  ← 不包含 mask
 │                h = phi(features) → masked_sum / n_valid → rho(h)
 │              ──> (1, output_dim)
 │          MAF flow: sample from p(theta | x_emb)
@@ -287,5 +296,7 @@ Posterior Predictive Check (PPC):
 The key design challenge is that different training simulations (and different real observations) may have different numbers of data points at different times in different bands. This is handled by:
 
 1. `encode_batch()` pads variable-length observations to a common length and appends a **validity indicator column** (1.0 = real data, 0.0 = padding).
-2. `SetSummaryNet` (DeepSet architecture) automatically infers the mask from this column and ignores padded entries via masked aggregation.
-3. This allows `sbi`'s internal training pipeline to call `embedding_net(x)` as a standard single-argument forward pass, without requiring a separate mask argument.
+2. `SetSummaryNet.fit_normalization()` computes feature statistics from valid observations only; the validity column is excluded and constant physical features use unit scale.
+3. `posterior_nn(..., z_score_x="none")` prevents `sbi` from standardizing the combined feature-plus-mask tensor before the embedding sees it.
+4. `SetSummaryNet` automatically infers the untouched mask, normalizes only the physical features, and ignores padded entries via masked aggregation.
+5. This allows `sbi`'s internal training pipeline to call `embedding_net(x)` as a standard single-argument forward pass, without requiring a separate mask argument.

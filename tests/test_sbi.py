@@ -22,7 +22,8 @@ from transfit.sbi.simulator import make_bolometric_simulator, make_multiband_sim
 from transfit.sbi.embedding import SetSummaryNet, MLPEmbeddingNet, encode_observations, encode_batch
 from transfit.sbi.training import generate_training_data, _filter_nans
 from transfit.sbi.posterior import SBIPosterior
-from transfit.sbi.io import save_posterior, load_posterior
+from transfit.sbi.io import save_posterior, load_posterior, _reconstruct_embedding_net
+from transfit.sbi import _build_density_estimator
 from transfit.priors import build_bounds, MixedBoundsPrior
 from transfit.api import _split_prior_specs, _apply_log10_priors, _split_sampling
 
@@ -156,6 +157,89 @@ class TestEmbedding:
         mask[1, 3:] = False
         out = net(x, mask)
         assert out.shape == (3, 8)
+
+    def test_feature_normalization_excludes_mask_and_padding(self):
+        x = torch.tensor(
+            [
+                [[5.0, 10.0, 1.0], [5.0, 20.0, 1.0], [999.0, 999.0, 0.0]],
+                [[5.0, 30.0, 1.0], [5.0, 40.0, 1.0], [5.0, 50.0, 1.0]],
+            ],
+            dtype=torch.float32,
+        )
+        original_validity = x[..., -1].clone()
+        valid = x[..., -1] != 0.0
+        expected = x[..., :-1][valid]
+
+        net = SetSummaryNet(feature_dim=3, hidden_features=8, output_dim=4)
+        net.fit_normalization(x)
+
+        torch.testing.assert_close(net.feature_mean, expected.mean(dim=0))
+        expected_scale = expected.std(dim=0, unbiased=False)
+        expected_scale = torch.where(
+            expected_scale > net.normalization_eps,
+            expected_scale,
+            torch.ones_like(expected_scale),
+        )
+        torch.testing.assert_close(net.feature_scale, expected_scale)
+        torch.testing.assert_close(x[..., -1], original_validity)
+
+    def test_fixed_cadence_mask_survives_normalization(self):
+        torch.manual_seed(0)
+        x = torch.tensor(
+            [
+                [[0.0, 10.0, 1.0], [0.5, 10.0, 1.0], [1.0, 10.0, 1.0]],
+                [[0.0, 20.0, 1.0], [0.5, 20.0, 1.0], [1.0, 20.0, 1.0]],
+            ],
+            dtype=torch.float32,
+        )
+        explicit_mask = torch.ones(2, 3, dtype=torch.bool)
+        net = SetSummaryNet(feature_dim=3, hidden_features=8, output_dim=4)
+        net.fit_normalization(x)
+
+        inferred = net(x)
+        explicit = net(x, explicit_mask)
+
+        torch.testing.assert_close(inferred, explicit)
+        assert not torch.allclose(inferred[0], inferred[1])
+
+    def test_density_estimator_disables_external_x_standardization(self, monkeypatch):
+        import sbi.neural_nets as sbi_neural_nets
+
+        captured = {}
+        marker = object()
+
+        def fake_posterior_nn(**kwargs):
+            captured.update(kwargs)
+            return marker
+
+        monkeypatch.setattr(sbi_neural_nets, "posterior_nn", fake_posterior_nn)
+        emb = SetSummaryNet(feature_dim=3, hidden_features=8, output_dim=4)
+
+        result = _build_density_estimator(
+            embedding_net=emb,
+            hidden_features=8,
+            num_transforms=2,
+        )
+
+        assert result is marker
+        assert captured["embedding_net"] is emb
+        assert captured["z_score_x"] == "none"
+
+    def test_legacy_unpickled_embedding_still_forwards(self):
+        emb = SetSummaryNet(feature_dim=3, hidden_features=8, output_dim=4)
+        del emb.feature_mean
+        del emb.feature_scale
+        del emb.feature_dim
+        del emb.normalize_features
+        del emb.normalization_eps
+        x = torch.tensor(
+            [[[0.0, 10.0, 1.0], [1.0, 20.0, 1.0]]],
+            dtype=torch.float32,
+        )
+
+        out = emb(x)
+
+        assert out.shape == (1, 4)
 
     def test_mlp_embedding(self):
         net = MLPEmbeddingNet(input_dim=10, hidden_features=32, output_dim=8)
@@ -348,6 +432,49 @@ class TestPosteriorBounds:
 
 class TestTrainSBIE2E:
 
+    def test_fixed_cadence_embedding_uses_observation(self):
+        """Regression: a fixed all-valid mask must not erase observation context."""
+        t_days = np.array([10.0, 20.0, 30.0])
+        posterior = tf.sbi.train_sbi(
+            model="nickel",
+            mode="bolometric",
+            z=0.01,
+            priors={
+                "M_ej": (1.0, 8.0),
+                "v_ej": (0.3, 2.0),
+                "M_ni": (0.01, 0.5),
+            },
+            fixed={
+                "f_ni": 0.5, "kappa_gamma": 0.03, "kappa": 0.2,
+                "R_0": 10.0, "E_Th_in": 0.0, "T_floor": 5000.0, "t_shift": 0.0,
+            },
+            cadence_templates=[{"t_days": t_days}],
+            n_simulations=100,
+            max_num_epochs=2,
+            hidden_features=8,
+            num_transforms=2,
+            training_batch_size=20,
+            show_progress=False,
+            Nx=10, Ny=20,
+        )
+
+        x_low = posterior._encode_observation(
+            np.array([40.0, 40.0, 40.0]),
+            t_days=t_days,
+        )
+        x_high = posterior._encode_observation(
+            np.array([44.0, 44.0, 44.0]),
+            t_days=t_days,
+        )
+        with torch.no_grad():
+            embedding_low = posterior.embedding_net(x_low)
+            embedding_high = posterior.embedding_net(x_high)
+
+        assert torch.all(x_low[..., -1] == 1.0)
+        assert torch.all(x_high[..., -1] == 1.0)
+        assert not torch.allclose(embedding_low, embedding_high)
+        assert posterior.meta["x_standardization"] == "mask_safe_embedding"
+
     def test_train_sbi_bolometric(self, tf_prior_nickel, nickel_prior):
         """End-to-end: train_sbi with bolometric mode and default SetSummaryNet."""
         prior, names_samp, names_all, fixed = tf_prior_nickel
@@ -491,6 +618,53 @@ class TestIO:
                 load_posterior(path)
         finally:
             os.unlink(path)
+
+    def test_set_summary_normalization_roundtrip(self):
+        emb = SetSummaryNet(feature_dim=3, hidden_features=8, output_dim=4)
+        x = torch.tensor(
+            [[[0.0, 10.0, 1.0], [1.0, 20.0, 1.0]]],
+            dtype=torch.float32,
+        )
+        emb.fit_normalization(x)
+        post = SBIPosterior(
+            model="nickel",
+            param_names=["M_ej"],
+            posterior=None,
+            embedding_net=emb,
+            mode="bolometric",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "set_summary.pt")
+            save_posterior(post, path)
+            loaded = load_posterior(path, trusted=True)
+
+        assert isinstance(loaded.embedding_net, SetSummaryNet)
+        assert loaded.embedding_net.normalize_features is True
+        torch.testing.assert_close(
+            loaded.embedding_net.feature_mean,
+            emb.feature_mean,
+        )
+        torch.testing.assert_close(
+            loaded.embedding_net.feature_scale,
+            emb.feature_scale,
+        )
+
+    def test_loads_legacy_set_summary_state(self):
+        emb = SetSummaryNet(feature_dim=3, hidden_features=8, output_dim=4)
+        legacy_state = {
+            key: value
+            for key, value in emb.state_dict().items()
+            if key not in {"feature_mean", "feature_scale"}
+        }
+        loaded = _reconstruct_embedding_net(
+            "SetSummaryNet",
+            {"feature_dim": 3, "hidden_features": 8, "output_dim": 4},
+            legacy_state,
+        )
+
+        torch.testing.assert_close(loaded.feature_mean, torch.zeros(2))
+        torch.testing.assert_close(loaded.feature_scale, torch.ones(2))
 
 
 class TestPosteriorDevice:

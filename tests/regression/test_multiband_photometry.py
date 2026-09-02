@@ -405,6 +405,11 @@ def test_physical_constraints_reject_ni_mass_larger_than_ejecta():
         {"M_ej": 1.0, "M_ni": 0.2, "f_ni": 0.2},
         model="nickel",
     ) == pytest.approx(0.0)
+    assert _physical_constraints_lnprior(
+        {"M_ej": 1.0, "M_ni": 0.3, "f_ni": 0.2},
+        model="nickel",
+        enforce_ni_mixing_constraint=False,
+    ) == pytest.approx(0.0)
     # This new constraint is specific to the nickel mass-coordinate model.
     assert _physical_constraints_lnprior(
         {"M_ej": 1.0, "M_ni": 0.3, "f_ni": 0.2},
@@ -426,6 +431,41 @@ def test_physical_constraints_reject_ni_mass_larger_than_ejecta():
     assert _physical_constraints_lnprior({"delta": 3.0}) == -np.inf
     assert _physical_constraints_lnprior({"R_csm_in": 100.0, "R_csm_out": 99.0}) == -np.inf
     assert _physical_constraints_lnprior({"R_csm_in": 100.0, "R_csm_out": 1000.0}) == pytest.approx(0.0)
+
+
+def test_predict_bol_can_explicitly_disable_ni_mixing_constraint():
+    params = {
+        "M_ej": 1.0,
+        "v_ej": 1.0,
+        "E_Th_in": 1.0,
+        "M_ni": 0.3,
+        "R_0": 10.0,
+        "f_ni": 0.2,
+        "kappa": 0.1,
+        "kappa_gamma": 0.03,
+        "T_floor": 4500.0,
+    }
+    with pytest.raises(ValueError, match="M_ni <= f_ni\\*M_ej"):
+        tf.predict_bol(
+            model="nickel",
+            params=params,
+            z=0.001728,
+            t_days=np.array([5.0, 10.0]),
+            t_max_days=20.0,
+            solver_kwargs={"Nx": 20, "Ny": 50},
+        )
+
+    prediction = tf.predict_bol(
+        model="nickel",
+        params=params,
+        z=0.001728,
+        t_days=np.array([5.0, 10.0]),
+        t_max_days=20.0,
+        solver_kwargs={"Nx": 20, "Ny": 50},
+        enforce_ni_mixing_constraint=False,
+    )
+    assert np.all(np.isfinite(prediction))
+    assert np.all(prediction > 0.0)
 
 
 def test_t_shift_prior_is_non_negative():

@@ -127,6 +127,8 @@ def _get_net_config(net: nn.Module) -> Dict[str, Any]:
             "feature_dim": phi_lin.in_features + 1,
             "hidden_features": phi_lin.out_features,
             "output_dim": rho_lin.out_features,
+            "normalize_features": net.normalize_features,
+            "normalization_eps": net.normalization_eps,
         }
     elif isinstance(net, MLPEmbeddingNet):
         first = net.net[0]
@@ -150,6 +152,21 @@ def _reconstruct_embedding_net(
     else:
         raise ValueError(f"Unknown embedding net class: {class_name}")
 
-    net.load_state_dict(state_dict)
+    if isinstance(net, SetSummaryNet):
+        # Checkpoints created before mask-safe feature normalization do not
+        # contain these buffers. Identity statistics reproduce their embedding
+        # state; the serialized sbi posterior still owns its original external
+        # standardizer.
+        incompatible = net.load_state_dict(state_dict, strict=False)
+        allowed_missing = {"feature_mean", "feature_scale"}
+        unexpected_missing = set(incompatible.missing_keys) - allowed_missing
+        if unexpected_missing or incompatible.unexpected_keys:
+            raise RuntimeError(
+                "Incompatible SetSummaryNet state dict: "
+                f"missing={sorted(unexpected_missing)}, "
+                f"unexpected={sorted(incompatible.unexpected_keys)}"
+            )
+    else:
+        net.load_state_dict(state_dict)
     net.eval()
     return net

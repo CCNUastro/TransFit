@@ -25,12 +25,13 @@ def make_bolometric_simulator(
     noise_sigma: Optional[float] = None,
     noise_model: Optional[Callable] = None,
     seed: Optional[int] = None,
-    Nx: int = 20,
-    Ny: int = 50,
+    Nx: int = 100,
+    Ny: int = 1000,
     t_max_days: float = 150.0,
     param_names: List[str],
     names_all: List[str],
     fixed: Dict[str, float],
+    enforce_ni_mixing_constraint: bool = True,
 ) -> Callable[[torch.Tensor], torch.Tensor]:
     """Return a callable that maps theta (tensor) -> simulated bolometric LC (tensor).
 
@@ -75,7 +76,11 @@ def make_bolometric_simulator(
                 vals = _param_values_from_sample(
                     theta_np[i], param_names, fixed
                 )
-                lp_phys = _physical_constraints_lnprior(vals, model=model)
+                lp_phys = _physical_constraints_lnprior(
+                    vals,
+                    model=model,
+                    enforce_ni_mixing_constraint=enforce_ni_mixing_constraint,
+                )
                 if not np.isfinite(lp_phys):
                     continue
 
@@ -92,6 +97,7 @@ def make_bolometric_simulator(
                     t_max_days=t_max_days,
                     interp_fill="nan",
                     solver_kwargs={"Nx": Nx, "Ny": Ny},
+                    enforce_ni_mixing_constraint=enforce_ni_mixing_constraint,
                 )
 
                 if np.any(~np.isfinite(y)):
@@ -130,12 +136,13 @@ def make_multiband_simulator(
     noise_sigma: Optional[float] = None,
     noise_model: Optional[Callable] = None,
     seed: Optional[int] = None,
-    Nx: int = 20,
-    Ny: int = 50,
+    Nx: int = 100,
+    Ny: int = 1000,
     t_max_days: float = 150.0,
     param_names: List[str],
     names_all: List[str],
     fixed: Dict[str, float],
+    enforce_ni_mixing_constraint: bool = True,
 ) -> Callable[[torch.Tensor], torch.Tensor]:
     """Return a callable that maps theta (tensor) -> simulated multiband observations (tensor).
 
@@ -194,7 +201,11 @@ def make_multiband_simulator(
                 vals = _param_values_from_sample(
                     theta_np[i], param_names, fixed
                 )
-                lp_phys = _physical_constraints_lnprior(vals, model=model)
+                lp_phys = _physical_constraints_lnprior(
+                    vals,
+                    model=model,
+                    enforce_ni_mixing_constraint=enforce_ni_mixing_constraint,
+                )
                 if not np.isfinite(lp_phys):
                     continue
 
@@ -217,6 +228,7 @@ def make_multiband_simulator(
                     t_max_days=t_max_days,
                     interp_fill="nan",
                     solver_kwargs={"Nx": Nx, "Ny": Ny},
+                    enforce_ni_mixing_constraint=enforce_ni_mixing_constraint,
                 )
 
                 if np.any(~np.isfinite(y)):

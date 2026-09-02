@@ -38,6 +38,28 @@ from .io import save_posterior, load_posterior
 from .diagnostics import simulation_based_calibration, posterior_predictive_check
 
 
+def _build_density_estimator(
+    *,
+    embedding_net: nn.Module,
+    hidden_features: int,
+    num_transforms: int,
+):
+    """Build an NPE network without standardizing the validity-mask channel."""
+    from sbi.neural_nets import posterior_nn
+
+    return posterior_nn(
+        model="maf",
+        embedding_net=embedding_net,
+        hidden_features=hidden_features,
+        num_transforms=num_transforms,
+        # x includes a categorical validity channel. Standardizing the entire
+        # tensor would turn a fixed-cadence all-one mask into zeros, causing the
+        # embedding to classify every real observation as padding. Physical
+        # features are normalized mask-safely inside SetSummaryNet instead.
+        z_score_x="none",
+    )
+
+
 def train_sbi(
     *,
     model: str,
@@ -52,6 +74,7 @@ def train_sbi(
     # Prior specification
     priors: Optional[Dict[str, Any]] = None,
     fixed: Optional[Dict[str, float]] = None,
+    enforce_ni_mixing_constraint: bool = True,
     # Training data generation
     n_simulations: int = 5000,
     noise_sigma: Optional[float] = None,
@@ -75,8 +98,8 @@ def train_sbi(
     cache_path: Optional[str] = None,
     show_progress: bool = True,
     # Forward model kwargs
-    Nx: int = 20,
-    Ny: int = 50,
+    Nx: int = 100,
+    Ny: int = 1000,
     t_max_days: float = 150.0,
 ) -> SBIPosterior:
     """Train a Neural Posterior Estimator for amortized inference.
@@ -118,7 +141,9 @@ def train_sbi(
     t_range : tuple[float, float]
         (t_min, t_max) for random cadence generation.
     embedding_net : nn.Module, optional
-        Custom embedding network. Default: SetSummaryNet.
+        Custom embedding network. Default: SetSummaryNet, which normalizes only
+        physical features from valid observations and leaves its final mask
+        channel untouched.
     hidden_features : int
         Hidden layer size in embedding net and normalizing flow.
     num_transforms : int
@@ -154,7 +179,6 @@ def train_sbi(
         from sbi.inference import NPE_C as SNPE
     except ImportError:  # sbi < 0.27
         from sbi.inference import SNPE
-    from sbi.neural_nets import posterior_nn
 
     model = canonical_model_name(model, warn_legacy=False)
     mode = str(mode).strip().lower()
@@ -178,7 +202,11 @@ def train_sbi(
     names_samp, bounds_samp, fixed_dict = _split_sampling(
         names_all, bounds_all, fixed=fixed_model
     )
-    _validate_fixed_physical_constraints(fixed_dict, model=model)
+    _validate_fixed_physical_constraints(
+        fixed_dict,
+        model=model,
+        enforce_ni_mixing_constraint=enforce_ni_mixing_constraint,
+    )
     log_flags_samp = [n in log_set_all for n in names_samp]
     mixed_prior = MixedBoundsPrior(
         bounds=bounds_samp, param_names=names_samp, log_flags=log_flags_samp
@@ -241,6 +269,7 @@ def train_sbi(
                 seed=seed + t_idx,
                 Nx=Nx, Ny=Ny, t_max_days=t_max_days,
                 param_names=names_samp, names_all=names_all, fixed=fixed_dict,
+                enforce_ni_mixing_constraint=enforce_ni_mixing_constraint,
             )
         else:
             sim = make_multiband_simulator(
@@ -253,6 +282,7 @@ def train_sbi(
                 seed=seed + t_idx,
                 Nx=Nx, Ny=Ny, t_max_days=t_max_days,
                 param_names=names_samp, names_all=names_all, fixed=fixed_dict,
+                enforce_ni_mixing_constraint=enforce_ni_mixing_constraint,
             )
 
         # Generate data
@@ -305,10 +335,11 @@ def train_sbi(
             output_dim=hidden_features,
         )
     embedding_net = embedding_net.to(train_device)
+    if isinstance(embedding_net, SetSummaryNet):
+        embedding_net.fit_normalization(x_train)
 
     # ---- Train NPE ----
-    density_estimator = posterior_nn(
-        model="maf",
+    density_estimator = _build_density_estimator(
         embedding_net=embedding_net,
         hidden_features=hidden_features,
         num_transforms=num_transforms,
@@ -346,6 +377,7 @@ def train_sbi(
             "names_all": names_all,
             "bounds_samp": np.asarray(bounds_samp, float).tolist(),
             "fixed": fixed_dict,
+            "enforce_ni_mixing_constraint": bool(enforce_ni_mixing_constraint),
             "n_simulations": n_simulations,
             "n_valid": len(theta_train),
             "Nx": Nx,
@@ -353,6 +385,7 @@ def train_sbi(
             "t_max_days": t_max_days,
             "t_range": list(t_range),
             "x_event_shape": list(x_train.shape[1:]),
+            "x_standardization": "mask_safe_embedding",
             "device": str(train_device),
         },
         band_vocabulary=band_vocabulary,

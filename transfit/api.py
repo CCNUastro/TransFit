@@ -472,6 +472,7 @@ def _physical_constraint_reason(
     vals: Dict[str, float],
     *,
     model: Optional[str] = None,
+    enforce_ni_mixing_constraint: bool = True,
 ) -> Optional[str]:
     """
     Return a short reason when a parameter set violates model-independent
@@ -512,6 +513,8 @@ def _physical_constraint_reason(
             return "M_ni must be <= M_ej."
 
     if (
+        enforce_ni_mixing_constraint
+        and
         model is not None
         and canonical_model_name(model, warn_legacy=False) == "nickel"
         and {"M_ej", "M_ni", "f_ni"}.issubset(values)
@@ -538,16 +541,27 @@ def _validate_physical_values(
     vals: Dict[str, float],
     *,
     model: Optional[str] = None,
+    enforce_ni_mixing_constraint: bool = True,
 ) -> None:
-    reason = _physical_constraint_reason(vals, model=model)
+    reason = _physical_constraint_reason(
+        vals,
+        model=model,
+        enforce_ni_mixing_constraint=enforce_ni_mixing_constraint,
+    )
     if reason is not None:
         raise ValueError(f"Physical parameter constraints are invalid: {reason}")
 
 
-def _validate_physical_model_vector(model: str, model_vector) -> None:
+def _validate_physical_model_vector(
+    model: str,
+    model_vector,
+    *,
+    enforce_ni_mixing_constraint: bool = True,
+) -> None:
     _validate_physical_values(
         _model_values_from_vector(model, model_vector),
         model=model,
+        enforce_ni_mixing_constraint=enforce_ni_mixing_constraint,
     )
 
 
@@ -556,10 +570,15 @@ def _resolve_forward_params(
     *,
     params: Optional[Dict[str, Any]],
     allow_missing_tfloor: bool,
+    enforce_ni_mixing_constraint: bool = True,
 ):
     if params is not None:
         model_vector = _model_vector_from_params(model, params, allow_missing_tfloor=allow_missing_tfloor)
-        _validate_physical_model_vector(model, model_vector)
+        _validate_physical_model_vector(
+            model,
+            model_vector,
+            enforce_ni_mixing_constraint=enforce_ni_mixing_constraint,
+        )
         return model_vector
     raise ValueError("Provide `params` for forward-model evaluation.")
 
@@ -583,15 +602,24 @@ def _solve_state(
     **solver_options,
 ):
     from .models.csm import CSMModel
+    from .models.nickel import NickelModel
 
+    enforce_ni_mixing_constraint = bool(
+        solver_options.pop("enforce_ni_mixing_constraint", True)
+    )
     t_max_days_rest = _observer_days_to_rest_days(t_max_days_obs, z)
     if hasattr(engine, "calculate_transport"):
+        transport_options = dict(solver_options)
+        if isinstance(engine, NickelModel):
+            transport_options["enforce_ni_mixing_constraint"] = bool(
+                enforce_ni_mixing_constraint
+            )
         transport = engine.calculate_transport(
             model_vector,
             Nx=Nx,
             Ny=Ny,
             t_max_days=t_max_days_rest,
-            **solver_options,
+            **transport_options,
         )
         return (
             transport.t_s,
@@ -957,6 +985,7 @@ def lightcurve_bol(
     z: Optional[float] = None,
     t_max_days: float = 150.0,
     solver_kwargs: Optional[Dict[str, Any]] = None,
+    enforce_ni_mixing_constraint: bool = True,
 ) -> BolometricLC:
     """
     Return a bolometric light curve on an observer-frame time grid.
@@ -976,11 +1005,22 @@ def lightcurve_bol(
         require_distance=False,
     )
     engine = _get_engine(model)
-    model_vector = _resolve_forward_params(model, params=params, allow_missing_tfloor=True)
+    model_vector = _resolve_forward_params(
+        model,
+        params=params,
+        allow_missing_tfloor=True,
+        enforce_ni_mixing_constraint=enforce_ni_mixing_constraint,
+    )
     solver = _resolve_solver_kwargs(solver_kwargs, model=model)
+    if not enforce_ni_mixing_constraint:
+        solver["enforce_ni_mixing_constraint"] = False
     z = ctx.distance.get_z()
     t_s, Lbol, Teff, Rph, transport = _solve_state(
-        engine, model_vector, **solver, t_max_days_obs=t_max_days, z=z
+        engine,
+        model_vector,
+        **solver,
+        t_max_days_obs=t_max_days,
+        z=z,
     )
     photosphere_valid = (
         np.asarray(transport.photosphere_valid, bool)
@@ -1015,6 +1055,7 @@ def predict_bol(
     t_max_days: float = 150.0,
     interp_fill: Literal["edge", "nan", "raise"] = "nan",
     solver_kwargs: Optional[Dict[str, Any]] = None,
+    enforce_ni_mixing_constraint: bool = True,
 ) -> np.ndarray:
     """
     Predict a bolometric observable at observer-frame times `t_days`.
@@ -1034,11 +1075,22 @@ def predict_bol(
         require_distance=False,
     )
     engine = _get_engine(model)
-    model_vector = _resolve_forward_params(model, params=params, allow_missing_tfloor=True)
+    model_vector = _resolve_forward_params(
+        model,
+        params=params,
+        allow_missing_tfloor=True,
+        enforce_ni_mixing_constraint=enforce_ni_mixing_constraint,
+    )
     solver = _resolve_solver_kwargs(solver_kwargs, model=model)
+    if not enforce_ni_mixing_constraint:
+        solver["enforce_ni_mixing_constraint"] = False
     z = ctx.distance.get_z()
     t_s, Lbol, Teff, Rph, transport = _solve_state(
-        engine, model_vector, **solver, t_max_days_obs=t_max_days, z=z
+        engine,
+        model_vector,
+        **solver,
+        t_max_days_obs=t_max_days,
+        z=z,
     )
     _validate_solved_state(
         Lbol,
@@ -1072,6 +1124,7 @@ def lightcurve_multiband(
     t_max_days: float = 150.0,
     sed=None,
     solver_kwargs: Optional[Dict[str, Any]] = None,
+    enforce_ni_mixing_constraint: bool = True,
 ) -> MultiBandLC:
     """
     Return a multi-band light curve on an observer-frame time grid.
@@ -1106,15 +1159,22 @@ def lightcurve_multiband(
     )
 
     solver = _resolve_solver_kwargs(solver_kwargs, model=model)
+    if not enforce_ni_mixing_constraint:
+        solver["enforce_ni_mixing_constraint"] = False
     engine = _get_engine(model)
     model_vector = _resolve_forward_params(
         model,
         params=params,
         allow_missing_tfloor=False,
+        enforce_ni_mixing_constraint=enforce_ni_mixing_constraint,
     )
     DL_cm = ctx.distance.get_DL_cm()
     t_s, Lbol, Teff, Rph, transport = _solve_state(
-        engine, model_vector, **solver, t_max_days_obs=t_max_days, z=z
+        engine,
+        model_vector,
+        **solver,
+        t_max_days_obs=t_max_days,
+        z=z,
     )
     _validate_solved_state(
         Lbol,
@@ -1159,6 +1219,7 @@ def predict_multiband(
     interp_fill: Literal["edge", "nan", "raise"] = "nan",
     sed=None,
     solver_kwargs: Optional[Dict[str, Any]] = None,
+    enforce_ni_mixing_constraint: bool = True,
 ) -> np.ndarray:
     """
     Predict multi-band observables at observer-frame times `t_days`.
@@ -1199,15 +1260,22 @@ def predict_multiband(
     )
 
     solver = _resolve_solver_kwargs(solver_kwargs, model=model)
+    if not enforce_ni_mixing_constraint:
+        solver["enforce_ni_mixing_constraint"] = False
     engine = _get_engine(model)
     model_vector = _resolve_forward_params(
         model,
         params=params,
         allow_missing_tfloor=False,
+        enforce_ni_mixing_constraint=enforce_ni_mixing_constraint,
     )
     DL_cm = ctx.distance.get_DL_cm()
     t_s, Lbol, Teff, Rph, transport = _solve_state(
-        engine, model_vector, **solver, t_max_days_obs=t_max_days, z=z
+        engine,
+        model_vector,
+        **solver,
+        t_max_days_obs=t_max_days,
+        z=z,
     )
     _validate_solved_state(
         Lbol,
@@ -1335,20 +1403,31 @@ def _physical_constraints_lnprior(
     vals: Dict[str, float],
     *,
     model: Optional[str] = None,
+    enforce_ni_mixing_constraint: bool = True,
 ) -> float:
     """
     Model-independent physical constraints that cannot be expressed as
     independent box priors.
     """
-    return -np.inf if _physical_constraint_reason(vals, model=model) is not None else 0.0
+    reason = _physical_constraint_reason(
+        vals,
+        model=model,
+        enforce_ni_mixing_constraint=enforce_ni_mixing_constraint,
+    )
+    return -np.inf if reason is not None else 0.0
 
 
 def _validate_fixed_physical_constraints(
     fixed: Dict[str, float],
     *,
     model: Optional[str] = None,
+    enforce_ni_mixing_constraint: bool = True,
 ) -> None:
-    reason = _physical_constraint_reason(fixed, model=model)
+    reason = _physical_constraint_reason(
+        fixed,
+        model=model,
+        enforce_ni_mixing_constraint=enforce_ni_mixing_constraint,
+    )
     if reason is not None:
         raise ValueError(f"Fixed physical constraints are invalid: {reason}")
 
@@ -1700,6 +1779,7 @@ class _MultibandPredictor:
     sed: Any
     interp_fill_fit: str
     model_kwargs_pred: Dict[str, Any]
+    enforce_ni_mixing_constraint: bool = True
 
     def __call__(self, model_params: Dict[str, float], t_eval: np.ndarray) -> np.ndarray:
         return predict_multiband(
@@ -1715,6 +1795,7 @@ class _MultibandPredictor:
             extinction=self.extinction_spec,
             sed=self.sed,
             interp_fill=self.interp_fill_fit,
+            enforce_ni_mixing_constraint=self.enforce_ni_mixing_constraint,
             **self.model_kwargs_pred,
         )
 
@@ -1725,6 +1806,7 @@ class _BolometricPredictor:
     z: float
     interp_fill_fit: str
     model_kwargs_pred: Dict[str, Any]
+    enforce_ni_mixing_constraint: bool = True
 
     def __call__(self, model_params: Dict[str, float], t_eval: np.ndarray) -> np.ndarray:
         return predict_bol(
@@ -1733,6 +1815,7 @@ class _BolometricPredictor:
             z=self.z,
             t_days=t_eval,
             interp_fill=self.interp_fill_fit,
+            enforce_ni_mixing_constraint=self.enforce_ni_mixing_constraint,
             **self.model_kwargs_pred,
         )
 
@@ -1750,6 +1833,7 @@ class _FitLnProb:
     predictor: Callable[[Dict[str, float], np.ndarray], np.ndarray]
     likelihood_y_kind: str
     nuisance_cfgs: Dict[str, Dict[str, Any]]
+    enforce_ni_mixing_constraint: bool = True
     is_upper_limit: Optional[np.ndarray] = None
     upper_limit_nsigma: Optional[np.ndarray] = None
 
@@ -1779,7 +1863,11 @@ class _FitLnProb:
             return -np.inf
 
         vals = _param_values_from_sample(sample_vec, self.names_samp, self.fixed)
-        lp_phys = _physical_constraints_lnprior(vals, model=self.model)
+        lp_phys = _physical_constraints_lnprior(
+            vals,
+            model=self.model,
+            enforce_ni_mixing_constraint=self.enforce_ni_mixing_constraint,
+        )
         if not np.isfinite(lp_phys):
             return -np.inf
 
@@ -2128,6 +2216,7 @@ def fit_multiband(
     sed=None,
     sampler_kwargs: Optional[Dict[str, Any]] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
+    enforce_ni_mixing_constraint: bool = True,
 ) -> FitResult:
     model = canonical_model_name(model, warn_legacy=True)
     ctx = _context_from_fit_inputs(
@@ -2224,7 +2313,11 @@ def fit_multiband(
     bounds_all, log_set_all = _apply_log10_priors(names_all, bounds_all, priors_log10)
     _validate_sampling_bounds_physical_constraints(names_all, bounds_all)
     names_samp, bounds_samp, fixed = _split_sampling(names_all, bounds_all, fixed=fixed_model)
-    _validate_fixed_physical_constraints(fixed, model=model)
+    _validate_fixed_physical_constraints(
+        fixed,
+        model=model,
+        enforce_ni_mixing_constraint=enforce_ni_mixing_constraint,
+    )
     model_kwargs_pred, tmax_meta = _resolve_fit_t_max_days(
         model_kwargs_pred,
         t_obs=t_obs,
@@ -2275,6 +2368,7 @@ def fit_multiband(
         sed=sed,
         interp_fill_fit=interp_fill_fit,
         model_kwargs_pred=model_kwargs_pred,
+        enforce_ni_mixing_constraint=enforce_ni_mixing_constraint,
     )
     lnprob = _FitLnProb(
         model=model,
@@ -2288,6 +2382,7 @@ def fit_multiband(
         predictor=predictor,
         likelihood_y_kind=ctx.y_kind,
         nuisance_cfgs=nuisance_cfgs,
+        enforce_ni_mixing_constraint=enforce_ni_mixing_constraint,
         is_upper_limit=is_upper_limit,
         upper_limit_nsigma=upper_limit_nsigma,
     )
@@ -2303,6 +2398,7 @@ def fit_multiband(
     meta.update(
         dict(
             model=model,
+            enforce_ni_mixing_constraint=bool(enforce_ni_mixing_constraint),
             y_kind=ctx.y_kind,
             mag_system=ctx.mag_system,
             names_all=names_all,
@@ -2368,6 +2464,7 @@ def fit_bol(
     sampler: str = "emcee",
     sampler_kwargs: Optional[Dict[str, Any]] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
+    enforce_ni_mixing_constraint: bool = True,
 ) -> FitResult:
     model = canonical_model_name(model, warn_legacy=True)
     if priors and "T_floor" in priors:
@@ -2440,7 +2537,11 @@ def fit_bol(
     _validate_sampling_bounds_physical_constraints(names_all, bounds_all)
 
     names_samp, bounds_samp, fixed = _split_sampling(names_all, bounds_all, fixed=fixed_model)
-    _validate_fixed_physical_constraints(fixed, model=model)
+    _validate_fixed_physical_constraints(
+        fixed,
+        model=model,
+        enforce_ni_mixing_constraint=enforce_ni_mixing_constraint,
+    )
     model_kwargs_pred, tmax_meta = _resolve_fit_t_max_days(
         model_kwargs_pred,
         t_obs=t_obs,
@@ -2463,6 +2564,7 @@ def fit_bol(
         z=ctx.distance.get_z(),
         interp_fill_fit=interp_fill_fit,
         model_kwargs_pred=model_kwargs_pred,
+        enforce_ni_mixing_constraint=enforce_ni_mixing_constraint,
     )
     lnprob = _FitLnProb(
         model=model,
@@ -2476,6 +2578,7 @@ def fit_bol(
         predictor=predictor,
         likelihood_y_kind="flux",
         nuisance_cfgs=nuisance_cfgs,
+        enforce_ni_mixing_constraint=enforce_ni_mixing_constraint,
     )
 
     samples, logp, meta, sampler_used = _run_sampler(
@@ -2488,6 +2591,7 @@ def fit_bol(
     meta.update(
         dict(
             model=model,
+            enforce_ni_mixing_constraint=bool(enforce_ni_mixing_constraint),
             y_kind="bol",
             names_all=names_all,
             bounds_all=np.asarray(bounds_all, float),

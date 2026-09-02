@@ -22,15 +22,39 @@ class SetSummaryNet(nn.Module):
     The last column of the input is treated as a validity indicator:
     1.0 = valid, 0.0 = padded.  When an explicit mask is not passed
     to forward(), the mask is automatically inferred from this column.
+    Physical feature normalization is fitted only on valid entries and is
+    applied inside this module, after the mask has been extracted.  The mask
+    channel must therefore never be standardized by ``sbi`` itself.
+
     This allows the network to be used as a standard nn.Module inside
-    sbi's posterior_nn, which only calls embedding_net(x).
+    sbi's posterior_nn, which only calls embedding_net(x), without changing
+    the semantics of the validity indicator.
     """
 
-    def __init__(self, feature_dim: int, hidden_features: int = 64, output_dim: int = 32):
+    def __init__(
+        self,
+        feature_dim: int,
+        hidden_features: int = 64,
+        output_dim: int = 32,
+        normalize_features: bool = True,
+        normalization_eps: float = 1e-6,
+    ):
         # phi operates on feature_dim - 1 (excluding the mask channel)
         super().__init__()
+        if int(feature_dim) < 2:
+            raise ValueError("feature_dim must include at least one feature and the mask.")
+        if float(normalization_eps) <= 0.0:
+            raise ValueError("normalization_eps must be positive.")
+
+        self.feature_dim = int(feature_dim)
+        self.normalize_features = bool(normalize_features)
+        self.normalization_eps = float(normalization_eps)
+        n_physical_features = self.feature_dim - 1
+        self.register_buffer("feature_mean", torch.zeros(n_physical_features))
+        self.register_buffer("feature_scale", torch.ones(n_physical_features))
+
         self.phi = nn.Sequential(
-            nn.Linear(feature_dim - 1, hidden_features),
+            nn.Linear(n_physical_features, hidden_features),
             nn.ReLU(),
             nn.Linear(hidden_features, hidden_features),
             nn.ReLU(),
@@ -42,18 +66,77 @@ class SetSummaryNet(nn.Module):
         )
         self.output_dim = output_dim
 
+    @torch.no_grad()
+    def fit_normalization(
+        self,
+        x: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+    ) -> "SetSummaryNet":
+        """Fit physical-feature normalization using valid observations only.
+
+        The validity indicator is read before normalization and is never part
+        of the fitted statistics. Constant physical features are centered but
+        use unit scale, avoiding division by zero while preserving mask values.
+        """
+        self._validate_input(x)
+        if not self.normalize_features:
+            return self
+
+        valid_mask = self._resolve_mask(x, mask)
+        valid_features = x[..., :-1][valid_mask]
+        if valid_features.shape[0] == 0:
+            raise ValueError("Cannot fit feature normalization without valid observations.")
+        if not torch.all(torch.isfinite(valid_features)):
+            raise ValueError("Cannot fit feature normalization from NaN or infinite values.")
+
+        mean = valid_features.mean(dim=0)
+        scale = valid_features.std(dim=0, unbiased=False)
+        scale = torch.where(
+            scale > self.normalization_eps,
+            scale,
+            torch.ones_like(scale),
+        )
+        self.feature_mean.copy_(mean.to(self.feature_mean))
+        self.feature_scale.copy_(scale.to(self.feature_scale))
+        return self
+
     def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         # x: (batch, N_obs, feature_dim)
         # mask: (batch, N_obs) boolean, True=valid
-        if mask is None:
-            # Infer mask from the last feature column
-            mask = (x[..., -1] != 0.0)
+        self._validate_input(x)
+        mask = self._resolve_mask(x, mask)
         features = x[..., :-1]  # strip mask channel
+        # Old serialized posterior objects predate these normalization buffers.
+        # They keep using the external standardizer stored in their sbi network.
+        if getattr(self, "normalize_features", False):
+            features = (features - self.feature_mean) / self.feature_scale
         h = self.phi(features)
         h = h * mask.unsqueeze(-1)
         n_valid = mask.sum(dim=-1, keepdim=True).clamp(min=1.0).float()
         h = h.sum(dim=1) / n_valid
         return self.rho(h)
+
+    def _validate_input(self, x: torch.Tensor) -> None:
+        feature_dim = getattr(self, "feature_dim", self.phi[0].in_features + 1)
+        if x.ndim < 2 or x.shape[-1] != feature_dim:
+            raise ValueError(
+                f"Expected input ending in feature_dim={feature_dim}, "
+                f"got shape {tuple(x.shape)}."
+            )
+
+    @staticmethod
+    def _resolve_mask(
+        x: torch.Tensor,
+        mask: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        if mask is None:
+            # Infer mask from the untouched validity-indicator column.
+            return x[..., -1] != 0.0
+        if mask.shape != x.shape[:-1]:
+            raise ValueError(
+                f"Expected mask shape {tuple(x.shape[:-1])}, got {tuple(mask.shape)}."
+            )
+        return mask.to(device=x.device, dtype=torch.bool)
 
 
 class MLPEmbeddingNet(nn.Module):

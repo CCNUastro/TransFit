@@ -1155,6 +1155,7 @@ class NickelModel:
         Ny=1000,
         t_max_days=150.0,
         density_profile="uniform",
+        enforce_ni_mixing_constraint=True,
     ) -> NickelTransportState:
         """Solve the profile-selected Nickel transport problem.
 
@@ -1248,7 +1249,7 @@ class NickelModel:
             raise ValueError("f_ni must be finite and in [0, 1].")
         mixed_mass_limit = f_ni * float(M_ej)
         tolerance = 1.0e-12 * max(abs(float(M_ni)), abs(mixed_mass_limit), 1.0)
-        if float(M_ni) > mixed_mass_limit + tolerance:
+        if enforce_ni_mixing_constraint and float(M_ni) > mixed_mass_limit + tolerance:
             raise ValueError(
                 "Nickel mass-coordinate mixing requires "
                 "M_ni <= f_ni*M_ej (equivalently f_ni >= M_ni/M_ej)."
