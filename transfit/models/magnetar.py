@@ -12,6 +12,53 @@ from transfit.constants import (
 )
 
 
+def _normalize_magnetar_heating_profile(heating_profile):
+    profile = str(heating_profile).strip().lower().replace("-", "_")
+    if profile == "tophat":
+        profile = "top_hat"
+    if profile not in {"top_hat", "arnett"}:
+        raise ValueError(
+            "heating_profile must be either 'top_hat' or 'arnett'."
+        )
+    return profile
+
+
+def _magnetar_spatial_profile(x_vals, *, I_M, f_mag, heating_profile):
+    """Return a volume-normalised magnetar deposition kernel.
+
+    ``top_hat`` preserves the historical TransFit implementation.  ``arnett``
+    uses the fundamental constant-density diffusion mode
+    sin(pi q)/(pi q), q=r/R, and normalises it to the same total deposited
+    magnetar power as the top-hat kernel.
+    """
+    profile = _normalize_magnetar_heating_profile(heating_profile)
+    x_min = float(x_vals[0])
+    x_max = float(x_vals[-1])
+
+    if profile == "top_hat":
+        x_heat = np.clip(float(f_mag) * x_max, x_min, x_max)
+        xi_vals = np.zeros_like(x_vals)
+        if x_heat > x_min:
+            denom = (x_heat**3 - x_min**3) / 3.0
+            xi_vals[(x_vals >= x_min) & (x_vals <= x_heat)] = I_M / denom
+        return xi_vals
+
+    q = x_vals / x_max
+    raw = np.sinc(q)
+    raw[-1] = 0.0
+
+    # Integral of x^2 sinc(x/x_max) dx, evaluated analytically so the
+    # normalisation does not depend on spatial resolution.
+    phase_min = PI * x_min / x_max
+    primitive_min = (
+        -(x_max**2 * x_min / PI**2) * np.cos(phase_min)
+        + (x_max**3 / PI**3) * np.sin(phase_min)
+    )
+    primitive_max = x_max**3 / PI**2
+    denom = primitive_max - primitive_min
+    return raw * (I_M / denom)
+
+
 @numba.njit(fastmath=True, cache=True)
 def thomas_algorithm(a, b, c_up, d, c_prime, d_prime, x_out):
     n = len(d)
@@ -119,8 +166,16 @@ class MagnetarModel:
         self.calculate_light_curve(self._warmup_theta, **warmup_kwargs)
         return self
 
-    def calculate_light_curve(self, theta, Nx=100, Ny=1000, t_max_days=150.0):
+    def calculate_light_curve(
+        self,
+        theta,
+        Nx=100,
+        Ny=1000,
+        t_max_days=150.0,
+        heating_profile="top_hat",
+    ):
         pi, c, day = PI, C_LIGHT, DAY
+        heating_profile = _normalize_magnetar_heating_profile(heating_profile)
 
         theta = tuple(theta)
         if len(theta) == 10:
@@ -139,6 +194,11 @@ class MagnetarModel:
                 "(or legacy length 9/7 forms)."
             )
 
+        if heating_profile == "arnett" and float(E_Th_in) != 0.0:
+            raise ValueError(
+                "heating_profile='arnett' currently requires E_Th_in=0."
+            )
+
         M_ej = float(M_ej) * M_SUN
         E_Th_in = float(E_Th_in) * 1.0e49
         R_max_in = float(R_max_in) * R_SUN
@@ -150,7 +210,6 @@ class MagnetarModel:
         v_ej = float(v_ej) * 1e9
 
         x_min, x_max = 1.0, 1.0e4
-        x_heat = np.clip(f_mag * x_max, x_min, x_max)
 
         E_K = 0.5 * M_ej * v_ej * v_ej
         I_M = (x_max**3 - x_min**3) / 3.0
@@ -179,13 +238,6 @@ class MagnetarModel:
         L0 = (4.0 * pi * R_min_in * c * u0) / (3.0 * kappa0 * rho_in)
         e0_coeff = E_Th_in / (2.0 * pi * u0 * x_max**2 * R_min_in**3)
 
-        if x_heat <= x_min + 1e-14:
-            xi0 = 0.0
-        else:
-            denom_heat = (x_heat**3 - x_min**3) / 3.0
-            xi0 = I_M / denom_heat
-        xi0 = max(xi0, 0.0)
-
         Nx, Ny = int(Nx), int(Ny)
         x_vals = np.linspace(x_min, x_max, Nx + 1)
         dx = (x_max - x_min) / Nx
@@ -207,10 +259,12 @@ class MagnetarModel:
         dep[mask] = 1.0 - np.exp(-(t_gamma / t_phys[mask])**2)
         heat = dep / (1.0 + t_phys / t_p)**2
 
-        xi_vals = np.zeros_like(x_vals)
-        if x_heat > x_min:
-            mask_heat = (x_vals >= x_min) & (x_vals <= x_heat)
-            xi_vals[mask_heat] = xi0
+        xi_vals = _magnetar_spatial_profile(
+            x_vals,
+            I_M=I_M,
+            f_mag=f_mag,
+            heating_profile=heating_profile,
+        )
 
         i_mid = slice(1, Nx)
         im1 = slice(0, Nx - 1)

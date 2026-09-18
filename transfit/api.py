@@ -470,9 +470,74 @@ def _observer_days_to_rest_days(t_days_obs: float, z: float) -> float:
     return float(t_days_obs) / (1.0 + float(z))
 
 
-def _solve_state(engine, model_vector, *, Nx: int, Ny: int, t_max_days_obs: float, z: float):
+def _resolve_heating_profile(model: str, heating_profile: Optional[str]) -> Optional[str]:
+    if heating_profile is None:
+        return None
+    if model not in {"magnetar", "magnetar_ni"}:
+        raise ValueError(
+            "heating_profile is only supported for model='magnetar' or "
+            "model='magnetar_ni'."
+        )
+    profile = str(heating_profile).strip().lower().replace("-", "_")
+    if profile == "tophat":
+        profile = "top_hat"
+    if profile not in {"top_hat", "arnett"}:
+        raise ValueError(
+            "heating_profile must be either 'top_hat' or 'arnett'."
+        )
+    return profile
+
+
+def _solve_state(
+    engine,
+    model_vector,
+    *,
+    Nx: int,
+    Ny: int,
+    t_max_days_obs: float,
+    z: float,
+    heating_profile: Optional[str] = None,
+):
     t_max_days_rest = _observer_days_to_rest_days(t_max_days_obs, z)
-    return engine.calculate_light_curve(model_vector, Nx=Nx, Ny=Ny, t_max_days=t_max_days_rest)
+    kwargs = {"Nx": Nx, "Ny": Ny, "t_max_days": t_max_days_rest}
+    if heating_profile is not None:
+        kwargs["heating_profile"] = heating_profile
+    return engine.calculate_light_curve(model_vector, **kwargs)
+
+
+def _heating_profile_solve_kwargs(heating_profile: Optional[str]) -> Dict[str, str]:
+    """Keep the legacy solver call signature unchanged for the default path."""
+    if heating_profile is None:
+        return {}
+    return {"heating_profile": heating_profile}
+
+
+def _apply_arnett_fit_contract(
+    model: str,
+    model_kwargs_pred: Dict[str, Any],
+    priors_model: Dict[str, Any],
+    fixed_model: Dict[str, float],
+) -> Dict[str, float]:
+    if model_kwargs_pred.get("heating_profile") != "arnett":
+        return fixed_model
+    if "f_mag" in priors_model:
+        raise ValueError(
+            "f_mag does not affect heating_profile='arnett'; remove its prior "
+            "or use heating_profile='top_hat'."
+        )
+    if model == "magnetar":
+        if "E_Th_in" in priors_model:
+            raise ValueError(
+                "heating_profile='arnett' currently requires E_Th_in=0; "
+                "remove its prior."
+            )
+        fixed_model = dict(fixed_model)
+        if float(fixed_model.get("E_Th_in", 0.0)) != 0.0:
+            raise ValueError(
+                "heating_profile='arnett' currently requires E_Th_in=0."
+            )
+        fixed_model["E_Th_in"] = 0.0
+    return fixed_model
 
 
 def _resolve_solver_kwargs(solver_kwargs: Optional[Dict[str, Any]]) -> Dict[str, int]:
@@ -524,6 +589,7 @@ def lightcurve_bol(
     params: Optional[Dict[str, Any]] = None,
     z: Optional[float] = None,
     t_max_days: float = 150.0,
+    heating_profile: Optional[Literal["top_hat", "arnett"]] = None,
     solver_kwargs: Optional[Dict[str, Any]] = None,
 ) -> BolometricLC:
     """
@@ -533,6 +599,7 @@ def lightcurve_bol(
     Internal model evolution is solved in rest-frame time.
     """
     model = canonical_model_name(model, warn_legacy=True)
+    heating_profile = _resolve_heating_profile(model, heating_profile)
     ctx = _context_from_forward_inputs(
         z=z,
         distance_modulus=None,
@@ -548,7 +615,12 @@ def lightcurve_bol(
     solver = _resolve_solver_kwargs(solver_kwargs)
     z = ctx.distance.get_z()
     t_s, Lbol, Teff, Rph = _solve_state(
-        engine, model_vector, **solver, t_max_days_obs=t_max_days, z=z
+        engine,
+        model_vector,
+        **solver,
+        t_max_days_obs=t_max_days,
+        z=z,
+        **_heating_profile_solve_kwargs(heating_profile),
     )
     _validate_solved_state(Lbol, Teff, Rph)
     t_days = _t_grid_days_from_ts(t_s, z=z)
@@ -568,6 +640,7 @@ def predict_bol(
     t_days: np.ndarray,
     t_max_days: float = 150.0,
     interp_fill: Literal["edge", "nan", "raise"] = "nan",
+    heating_profile: Optional[Literal["top_hat", "arnett"]] = None,
     solver_kwargs: Optional[Dict[str, Any]] = None,
 ) -> np.ndarray:
     """
@@ -577,6 +650,7 @@ def predict_bol(
     Internal model evolution is solved in rest-frame time.
     """
     model = canonical_model_name(model, warn_legacy=True)
+    heating_profile = _resolve_heating_profile(model, heating_profile)
     ctx = _context_from_forward_inputs(
         z=z,
         distance_modulus=None,
@@ -592,7 +666,12 @@ def predict_bol(
     solver = _resolve_solver_kwargs(solver_kwargs)
     z = ctx.distance.get_z()
     t_s, Lbol, Teff, Rph = _solve_state(
-        engine, model_vector, **solver, t_max_days_obs=t_max_days, z=z
+        engine,
+        model_vector,
+        **solver,
+        t_max_days_obs=t_max_days,
+        z=z,
+        **_heating_profile_solve_kwargs(heating_profile),
     )
     _validate_solved_state(Lbol, Teff, Rph)
     t_grid_days = _t_grid_days_from_ts(t_s, z=z)
@@ -620,6 +699,7 @@ def lightcurve_multiband(
     extinction: Optional[Dict[str, Any] | ExtinctionSpec] = None,
     t_max_days: float = 150.0,
     sed=None,
+    heating_profile: Optional[Literal["top_hat", "arnett"]] = None,
     solver_kwargs: Optional[Dict[str, Any]] = None,
 ) -> MultiBandLC:
     """
@@ -629,6 +709,7 @@ def lightcurve_multiband(
     Internal model evolution is solved in rest-frame time.
     """
     model = canonical_model_name(model, warn_legacy=True)
+    heating_profile = _resolve_heating_profile(model, heating_profile)
     ctx = _context_from_forward_inputs(
         z=z,
         distance_modulus=distance_modulus,
@@ -659,7 +740,12 @@ def lightcurve_multiband(
     solver = _resolve_solver_kwargs(solver_kwargs)
     DL_cm = ctx.distance.get_DL_cm()
     t_s, Lbol, Teff, Rph = _solve_state(
-        engine, model_vector, **solver, t_max_days_obs=t_max_days, z=z
+        engine,
+        model_vector,
+        **solver,
+        t_max_days_obs=t_max_days,
+        z=z,
+        **_heating_profile_solve_kwargs(heating_profile),
     )
     _validate_solved_state(Lbol, Teff, Rph)
     t_days = _t_grid_days_from_ts(t_s, z=z)
@@ -695,6 +781,7 @@ def predict_multiband(
     t_max_days: float = 150.0,
     interp_fill: Literal["edge", "nan", "raise"] = "nan",
     sed=None,
+    heating_profile: Optional[Literal["top_hat", "arnett"]] = None,
     solver_kwargs: Optional[Dict[str, Any]] = None,
 ) -> np.ndarray:
     """
@@ -704,6 +791,7 @@ def predict_multiband(
     Internal model evolution is solved in rest-frame time.
     """
     model = canonical_model_name(model, warn_legacy=True)
+    heating_profile = _resolve_heating_profile(model, heating_profile)
     ctx = _context_from_forward_inputs(
         z=z,
         distance_modulus=distance_modulus,
@@ -740,7 +828,12 @@ def predict_multiband(
     solver = _resolve_solver_kwargs(solver_kwargs)
     DL_cm = ctx.distance.get_DL_cm()
     t_s, Lbol, Teff, Rph = _solve_state(
-        engine, model_vector, **solver, t_max_days_obs=t_max_days, z=z
+        engine,
+        model_vector,
+        **solver,
+        t_max_days_obs=t_max_days,
+        z=z,
+        **_heating_profile_solve_kwargs(heating_profile),
     )
     _validate_solved_state(Lbol, Teff, Rph)
     t_grid_days = _t_grid_days_from_ts(t_s, z=z)
@@ -1512,6 +1605,10 @@ def fit_multiband(
     if sed is None:
         sed = BlackbodySED()
     model_kwargs_pred, interp_fill_fit = _split_fit_model_kwargs(model_kwargs)
+    if "heating_profile" in model_kwargs_pred:
+        model_kwargs_pred["heating_profile"] = _resolve_heating_profile(
+            model, model_kwargs_pred["heating_profile"]
+        )
     data = _apply_data_filter(data)
 
     # ---- data ----
@@ -1531,6 +1628,9 @@ def fit_multiband(
     priors_model, fixed_model, nuisance_cfgs = _split_likelihood_nuisance_fit_inputs(
         priors,
         fixed,
+    )
+    fixed_model = _apply_arnett_fit_contract(
+        model, model_kwargs_pred, priors_model, fixed_model
     )
     fixed_model = _apply_default_fixed_model_params(model, priors_model, fixed_model)
     priors_lin, priors_log10 = _split_prior_specs(priors_model)
@@ -1683,6 +1783,10 @@ def fit_bol(
     sampler_kwargs = dict(sampler_kwargs or {})
     model_kwargs = dict(model_kwargs or {})
     model_kwargs_pred, interp_fill_fit = _split_fit_model_kwargs(model_kwargs)
+    if "heating_profile" in model_kwargs_pred:
+        model_kwargs_pred["heating_profile"] = _resolve_heating_profile(
+            model, model_kwargs_pred["heating_profile"]
+        )
     data = _apply_data_filter(data)
 
     t_obs = _as_1d_float(data.t_days, "data.t_days")
@@ -1696,6 +1800,9 @@ def fit_bol(
     priors_model, fixed_model, nuisance_cfgs = _split_likelihood_nuisance_fit_inputs(
         priors,
         fixed,
+    )
+    fixed_model = _apply_arnett_fit_contract(
+        model, model_kwargs_pred, priors_model, fixed_model
     )
     fixed_model = _apply_default_fixed_model_params(model, priors_model, fixed_model)
     priors_lin, priors_log10 = _split_prior_specs(priors_model)

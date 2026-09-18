@@ -4,6 +4,10 @@
 import numpy as np
 import numba
 from transfit.modules.interp import interp_fit
+from transfit.models.magnetar import (
+    _magnetar_spatial_profile,
+    _normalize_magnetar_heating_profile,
+)
 
 from transfit.constants import (
     PI, C_LIGHT, DAY,
@@ -126,10 +130,18 @@ class MagNiModel:
         self.calculate_light_curve(self._warmup_theta, **warmup_kwargs)
         return self
 
-    def calculate_light_curve(self, theta, Nx=100, Ny=1000, t_max_days=150.0):
+    def calculate_light_curve(
+        self,
+        theta,
+        Nx=100,
+        Ny=1000,
+        t_max_days=150.0,
+        heating_profile="top_hat",
+    ):
         pi, c, day = PI, C_LIGHT, DAY
         eNi, eCo = EPSILON_NI, EPSILON_CO
         tau_Ni, tau_Co = TAU_NI, TAU_CO
+        heating_profile = _normalize_magnetar_heating_profile(heating_profile)
 
         theta = tuple(theta)
         if len(theta) == 10:
@@ -160,7 +172,6 @@ class MagNiModel:
         v_ej = float(v_ej) * 1e9
 
         x_min, x_max = 1.0, 1.0e4
-        x_heat_mag = np.clip(f_mag * x_max, x_min, x_max)
         x_heat_ni = np.clip(f_ni * x_max, x_min, x_max)
 
         E_K = 0.5 * M_ej * v_ej * v_ej
@@ -189,13 +200,6 @@ class MagNiModel:
         u0 = rho_in * eps0 * t_diff
         L0 = (4.0 * pi * R_min_in * c * u0) / (3.0 * kappa0 * rho_in)
         e0_coeff = E_Th_in / (2.0 * pi * u0 * x_max**2 * R_min_in**3)
-
-        if x_heat_mag <= x_min + 1e-14:
-            xi0_mag = 0.0
-        else:
-            denom_heat_mag = (x_heat_mag**3 - x_min**3) / 3.0
-            xi0_mag = I_M / denom_heat_mag
-        xi0_mag = max(xi0_mag, 0.0)
 
         if x_heat_ni <= x_min + 1e-14:
             xi0_ni = 0.0
@@ -231,10 +235,12 @@ class MagNiModel:
         ni_scale = (M_ni / M_ej) * (eNi - eCo) / eps0
         heat_ni = ni_scale * heat_ni
 
-        xi_mag_vals = np.zeros_like(x_vals)
-        if x_heat_mag > x_min:
-            mask_heat_mag = (x_vals >= x_min) & (x_vals <= x_heat_mag)
-            xi_mag_vals[mask_heat_mag] = xi0_mag
+        xi_mag_vals = _magnetar_spatial_profile(
+            x_vals,
+            I_M=I_M,
+            f_mag=f_mag,
+            heating_profile=heating_profile,
+        )
 
         xi_ni_vals = np.zeros_like(x_vals)
         if x_heat_ni > x_min:
