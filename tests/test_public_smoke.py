@@ -456,8 +456,11 @@ def test_fit_multiband_bpl_samples_delta_and_n_when_priors_are_explicit(monkeypa
         assert list(prior.param_names) == ["delta", "n"]
         np.testing.assert_allclose(
             prior.bounds,
-            np.array([[0.0, 2.9], [5.1, 14.0]], dtype=float),
+            np.array([[0.0, 1.0], [5.1, 14.0]], dtype=float),
         )
+        assert np.isfinite(prior.lnprior(np.array([0.0, 8.5])))
+        assert np.isfinite(prior.lnprior(np.array([1.0, 8.5])))
+        assert not np.isfinite(prior.lnprior(np.array([1.00001, 8.5])))
         sample = np.array([0.4, 8.5], dtype=float)
         return sample.reshape(1, 2), np.array([0.0], float), {}, "fake"
 
@@ -482,7 +485,7 @@ def test_fit_multiband_bpl_samples_delta_and_n_when_priors_are_explicit(monkeypa
         filters={"g": {"lambda_eff_A": 4770.0}},
         y_kind="mag",
         mag_system="ab",
-        priors={"delta": (0.0, 2.9), "n": (5.1, 14.0)},
+        priors={"delta": (0.0, 1.0), "n": (5.1, 14.0)},
         fixed=fixed,
         model_kwargs={
             "t_max_days": 10.0,

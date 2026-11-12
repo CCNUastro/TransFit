@@ -53,6 +53,7 @@ class MixedBoundsPrior:
     bounds: np.ndarray
     param_names: Sequence[str]
     log_flags: Optional[Sequence[bool]] = None
+    inclusive_names: Sequence[str] = ()
 
     def __post_init__(self):
         b = np.asarray(self.bounds, float)
@@ -87,7 +88,8 @@ class MixedBoundsPrior:
         x = np.asarray(theta, float)
         lo = self.bounds[:, 0]
         hi = self.bounds[:, 1]
-        ok = np.all((x > lo) & (x < hi))
+        inclusive = np.asarray([name in self.inclusive_names for name in self.param_names], bool)
+        ok = np.all(np.where(inclusive, (x >= lo) & (x <= hi), (x > lo) & (x < hi)))
         if not ok:
             return -np.inf
 

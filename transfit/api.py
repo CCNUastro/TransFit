@@ -504,8 +504,12 @@ def _physical_constraint_reason(
         if "s" in values and not (values["n"] > values["s"]):
             return "n must be > s."
 
-    if "delta" in values and not (values["delta"] < 3.0):
-        return "delta must be < 3."
+    if "delta" in values:
+        if model is not None and canonical_model_name(model, warn_legacy=False) == "nickel":
+            if not (0.0 <= values["delta"] <= 1.0):
+                return "delta must be in [0, 1]."
+        elif not (values["delta"] < 3.0):
+            return "delta must be < 3."
 
     if "M_ni" in values and "M_ej" in values:
         if values["M_ni"] > values["M_ej"]:
@@ -1353,7 +1357,7 @@ def _validate_fixed_physical_constraints(
         raise ValueError(f"Fixed physical constraints are invalid: {reason}")
 
 
-def _validate_sampling_bounds_physical_constraints(names: Sequence[str], bounds: np.ndarray) -> None:
+def _validate_sampling_bounds_physical_constraints(names: Sequence[str], bounds: np.ndarray, *, model: Optional[str] = None) -> None:
     b = np.asarray(bounds, float)
     for name, (lo, hi) in zip([str(n) for n in names], b):
         if name in _POSITIVE_PARAMS and lo <= 0.0:
@@ -1362,8 +1366,12 @@ def _validate_sampling_bounds_physical_constraints(names: Sequence[str], bounds:
             raise ValueError(f"Prior bounds for '{name}' must be >= 0.")
         if name in _UNIT_INTERVAL_PARAMS and (lo < 0.0 or hi > 1.0):
             raise ValueError(f"Prior bounds for '{name}' must stay within [0, 1].")
-        if name == "delta" and hi >= 3.0:
-            raise ValueError("Prior bounds for 'delta' must satisfy hi < 3.")
+        if name == "delta":
+            if model is not None and canonical_model_name(model, warn_legacy=False) == "nickel":
+                if lo < 0.0 or hi > 1.0:
+                    raise ValueError("Prior bounds for 'delta' must stay within [0, 1].")
+            elif hi >= 3.0:
+                raise ValueError("Prior bounds for 'delta' must satisfy hi < 3.")
         if name == "n" and lo <= 5.0:
             raise ValueError("Prior bounds for 'n' must satisfy lo > 5.")
 
@@ -2222,7 +2230,7 @@ def fit_multiband(
     priors_lin, priors_log10 = _split_prior_specs(priors_model)
     names_all, bounds_all = build_bounds(model, priors=priors_lin, include_t_shift=True)
     bounds_all, log_set_all = _apply_log10_priors(names_all, bounds_all, priors_log10)
-    _validate_sampling_bounds_physical_constraints(names_all, bounds_all)
+    _validate_sampling_bounds_physical_constraints(names_all, bounds_all, model=model)
     names_samp, bounds_samp, fixed = _split_sampling(names_all, bounds_all, fixed=fixed_model)
     _validate_fixed_physical_constraints(fixed, model=model)
     model_kwargs_pred, tmax_meta = _resolve_fit_t_max_days(
@@ -2240,7 +2248,8 @@ def fit_multiband(
         nuisance_cfgs,
     )
     fixed = _add_fixed_likelihood_nuisance(fixed, nuisance_cfgs)
-    prior = MixedBoundsPrior(bounds=bounds_samp, param_names=names_samp, log_flags=log_flags_samp)
+    prior = MixedBoundsPrior(bounds=bounds_samp, param_names=names_samp, log_flags=log_flags_samp,
+                             inclusive_names=("delta",) if canonical_model_name(model, warn_legacy=False) == "nickel" else ())
 
     # ---- band check (case-sensitive) ----
     if ctx.filters is None:
@@ -2437,7 +2446,7 @@ def fit_bol(
         bounds_all = np.delete(bounds_all, i_tf, axis=0)
         if "T_floor" in log_set_all:
             log_set_all.remove("T_floor")
-    _validate_sampling_bounds_physical_constraints(names_all, bounds_all)
+    _validate_sampling_bounds_physical_constraints(names_all, bounds_all, model=model)
 
     names_samp, bounds_samp, fixed = _split_sampling(names_all, bounds_all, fixed=fixed_model)
     _validate_fixed_physical_constraints(fixed, model=model)
@@ -2456,7 +2465,8 @@ def fit_bol(
         nuisance_cfgs,
     )
     fixed = _add_fixed_likelihood_nuisance(fixed, nuisance_cfgs)
-    prior = MixedBoundsPrior(bounds=bounds_samp, param_names=names_samp, log_flags=log_flags_samp)
+    prior = MixedBoundsPrior(bounds=bounds_samp, param_names=names_samp, log_flags=log_flags_samp,
+                             inclusive_names=("delta",) if canonical_model_name(model, warn_legacy=False) == "nickel" else ())
 
     predictor = _BolometricPredictor(
         model=model,

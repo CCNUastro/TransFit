@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from scipy.integrate import quad
 
 from transfit.models.nickel import (
     _BPL_Q_T,
@@ -79,15 +80,17 @@ THIN_TAIL_PARAMS = (
 )
 
 
-def _tail_deposited_heating(t_days, params=TAIL_PARAMS):
+def _tail_deposited_heating(t_days, params=TAIL_PARAMS, density_profile="uniform"):
     """Deposited Ni/Co power for a canonical nickel parameter tuple."""
     t_s = np.asarray(t_days, dtype=float) * DAY
     mass = params[0] * M_SUN
     velocity = params[1] * 1.0e9
     nickel_mass = params[3] * M_SUN
-    t_gamma = np.sqrt(
-        3.0 * params[7] * mass / (4.0 * np.pi * velocity**2)
-    )
+    moments = [quad(lambda q: q**j * float(_eta_q(q, density_profile, 0.0, 10.0)),
+                    _PROFILE_Q_MIN, 1.0, points=[1 / 3], epsabs=1e-12)[0]
+               for j in (0, 2, 4)]
+    t_gamma = np.sqrt(params[7] * mass * moments[0] * moments[2]
+                      / (4.0 * np.pi * velocity**2 * moments[1]**2))
     leakage = np.ones_like(t_s)
     positive = t_s > 0.0
     leakage[positive] = 1.0 - np.exp(-(t_gamma / t_s[positive]) ** 2)
@@ -624,7 +627,7 @@ def test_default_fully_thin_tail_equals_deposited_heating(density_profile):
     assert np.any(fully_thin)
     np.testing.assert_allclose(
         state.Ldirect[fully_thin],
-        _tail_deposited_heating(t_days[fully_thin], THIN_TAIL_PARAMS),
+        _tail_deposited_heating(t_days[fully_thin], THIN_TAIL_PARAMS, density_profile),
         rtol=3.0e-13,
         atol=3.0e-13,
     )
@@ -728,7 +731,7 @@ def test_uniform_outer_boundary_regression():
             4.251858603503674e41,
             1.8911205719718333e41,
             2.8654056242033364e41,
-            1.215362559252372e42,
+            1.2153597460957182e42,
         ],
         rtol=3.0e-15,
         atol=0.0,
@@ -745,7 +748,7 @@ def test_uniform_outer_boundary_regression():
             6.412296018535892e13,
             2.872068009267946e14,
             9.902832987701920e14,
-            2.0394794177697258e15,
+            2.0394770574129868e15,
         ],
         rtol=3.0e-15,
         atol=0.0,
@@ -924,8 +927,11 @@ def test_nonuniform_density_light_curves_converge_with_spatial_resolution(densit
 def test_bpl_indices_are_validated():
     model = NickelModel()
 
-    with pytest.raises(ValueError, match="delta"):
-        model.calculate_light_curve(PARAMS + (3.0, 10.0), density_profile="bpl")
+    for delta in (0.0, 1.0):
+        model.calculate_light_curve(PARAMS + (delta, 10.0), density_profile="bpl", Nx=10, Ny=20)
+    for delta in (-0.001, 1.001):
+        with pytest.raises(ValueError, match="delta"):
+            model.calculate_light_curve(PARAMS + (delta, 10.0), density_profile="bpl")
     with pytest.raises(ValueError, match="n must"):
         model.calculate_light_curve(PARAMS + (0.0, 5.0), density_profile="bpl")
 

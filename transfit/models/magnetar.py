@@ -4,6 +4,7 @@
 import numpy as np
 import numba
 from transfit.modules.interp import interp_fit
+from transfit.models.nickel import _central_gamma_timescale
 
 from transfit.constants import (
     PI, C_LIGHT, DAY,
@@ -162,7 +163,9 @@ class MagnetarModel:
         t_ex = R_min_in / v_min
         t_diff = 3.0 * kappa0 * rho_in * R_min_in**2 / c
         tau_in = kappa0 * rho_in * R_min_in
-        t_gamma = np.sqrt((3.0 * kappa_g * M_ej) / (4.0 * pi * v_ej * v_ej))
+        t_gamma = _central_gamma_timescale(
+            M_ej, v_ej, kappa_g, "uniform", 0.0, 10.0, x_min / x_max, 1.0
+        )
 
         I_ns = 1.0e45
         R_ns = 1.0e6

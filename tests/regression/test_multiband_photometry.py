@@ -424,6 +424,10 @@ def test_physical_constraints_reject_ni_mass_larger_than_ejecta():
     assert _physical_constraints_lnprior({"s": 2.0, "n": 1.5}) == -np.inf
     assert _physical_constraints_lnprior({"delta": -0.1}) == -np.inf
     assert _physical_constraints_lnprior({"delta": 3.0}) == -np.inf
+    for delta in (0.0, 1.0):
+        assert _physical_constraints_lnprior({"delta": delta}, model="nickel") == 0.0
+    assert _physical_constraints_lnprior({"delta": 1.001}, model="nickel") == -np.inf
+    assert _physical_constraints_lnprior({"delta": 2.0}, model="csm") == 0.0
     assert _physical_constraints_lnprior({"R_csm_in": 100.0, "R_csm_out": 99.0}) == -np.inf
     assert _physical_constraints_lnprior({"R_csm_in": 100.0, "R_csm_out": 1000.0}) == pytest.approx(0.0)
 

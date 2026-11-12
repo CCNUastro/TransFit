@@ -257,8 +257,8 @@ def _q_profile_moment(q_min, q_max, order, density_profile, delta, n):
             )
         )
 
-    if not (np.isfinite(delta) and 0.0 <= delta < 3.0):
-        raise ValueError("delta must be finite and satisfy 0 <= delta < 3.")
+    if not (np.isfinite(delta) and 0.0 <= delta <= 1.0):
+        raise ValueError("delta must be finite and satisfy 0 <= delta <= 1.")
     if not (np.isfinite(n) and n > 5.0):
         raise ValueError("n must be finite and > 5.")
 
@@ -271,6 +271,14 @@ def _q_profile_moment(q_min, q_max, order, density_profile, delta, n):
         q_t**delta * _integral_power_law(q_min, q_t, order - delta)
         + q_t**n * _integral_power_law(q_t, q_max, order - n)
     )
+
+
+def _central_gamma_timescale(M_ej, v_rms, kappa_gamma, density_profile, delta, n, q_min, q_max):
+    """Central radial column proxy for global gamma deposition on the finite profile."""
+    i0 = _q_profile_moment(q_min, q_max, 0, density_profile, delta, n)
+    i2 = _q_profile_moment(q_min, q_max, 2, density_profile, delta, n)
+    i4 = _q_profile_moment(q_min, q_max, 4, density_profile, delta, n)
+    return np.sqrt(kappa_gamma * M_ej * i0 * i4 / (4.0 * PI * v_rms**2 * i2**2))
 
 
 def _q_enclosed_profile_mass(q, q_min, density_profile, delta, n):
@@ -1014,11 +1022,8 @@ def _calculate_uniform_legacy_transport(
     )
     t_ex = R_scale / v_scale
     t_diff = 3.0 * float(kappa0) * rho_scale * R_scale**2 / C_LIGHT
-    t_gamma = np.sqrt(
-        3.0
-        * float(kappa_gamma)
-        * float(M_ej)
-        / (4.0 * PI * float(v_ej) ** 2)
+    t_gamma = _central_gamma_timescale(
+        M_ej, v_ej, kappa_gamma, "uniform", 0.0, 10.0, x_min / x_max, 1.0
     )
 
     u0 = rho_scale * (EPSILON_NI - EPSILON_CO) * t_diff
@@ -1305,7 +1310,9 @@ class NickelModel:
         )
         t_ex = R_scale / v_scale
         t_diff = 3.0 * kappa0 * rho_scale * R_scale**2 / c
-        t_gamma = np.sqrt((3.0 * kappa_g * M_ej) / (4.0 * pi * v_ej * v_ej))
+        t_gamma = _central_gamma_timescale(
+            M_ej, v_ej, kappa_g, density_profile, delta, n, q_min, q_max
+        )
 
         u0 = rho_scale * (eNi - eCo) * t_diff
         L0 = (4.0 * pi * R_scale * c * u0) / (3.0 * kappa0 * rho_scale)
