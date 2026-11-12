@@ -1058,14 +1058,7 @@ def _calculate_uniform_legacy_transport(
     f_ob_vals = -(4.0 / (3.0 * tau_scale)) * (fR_vals * fR_vals)
 
     t_phys = y_vals * t_diff
-    e_co_ratio = EPSILON_CO / (EPSILON_NI - EPSILON_CO)
-    heat = np.exp(-t_phys / TAU_NI)
-    co_deposition = np.zeros_like(t_phys)
-    positive_time = t_phys > 0.0
-    co_deposition[positive_time] = 1.0 - np.exp(
-        -(t_gamma / t_phys[positive_time]) ** 2
-    )
-    heat += e_co_ratio * np.exp(-t_phys / TAU_CO) * co_deposition
+    heat = _radioactive_heating_shape(t_phys, t_gamma)
 
     source_profile = _legacy_uniform_ni_source_profile(x_vals, x_heat, xi0)
     x_inner = x_vals[1:-1]
@@ -1171,7 +1164,7 @@ class NickelModel:
         Notes
         -----
         Uniform reproduces the historical ``x=1..1e4`` grid, linear time grid,
-        Co-only gamma leakage, outer-boundary luminosity, and homologous
+        global gamma leakage, outer-boundary luminosity, and homologous
         temperature-floor mapping. BPL and exponential use the common
         ``q=v/v_max=r/R_out`` coordinate from ``1e-4`` to ``1``, a quadratic
         time grid, and the moving ``tau=2/3`` finite-volume boundary.

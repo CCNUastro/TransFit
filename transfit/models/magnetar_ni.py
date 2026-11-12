@@ -4,12 +4,13 @@
 import numpy as np
 import numba
 from transfit.modules.interp import interp_fit
+from transfit.models.nickel import _radioactive_heating_shape
 
 from transfit.constants import (
     PI, C_LIGHT, DAY,
     M_SUN, R_SUN,
     SIGMA_SB,
-    EPSILON_NI, EPSILON_CO, TAU_NI, TAU_CO,
+    EPSILON_NI, EPSILON_CO,
 )
 
 
@@ -129,7 +130,6 @@ class MagNiModel:
     def calculate_light_curve(self, theta, Nx=100, Ny=1000, t_max_days=150.0):
         pi, c, day = PI, C_LIGHT, DAY
         eNi, eCo = EPSILON_NI, EPSILON_CO
-        tau_Ni, tau_Co = TAU_NI, TAU_CO
 
         theta = tuple(theta)
         if len(theta) == 10:
@@ -226,10 +226,8 @@ class MagNiModel:
 
         # Two power sources are added in the same PDE source term.
         heat_mag = dep / (1.0 + t_phys / t_p)**2
-        eCo_ratio = eCo / (eNi - eCo)
-        heat_ni = np.exp(-t_phys / tau_Ni) + eCo_ratio * np.exp(-t_phys / tau_Co) * dep
         ni_scale = (M_ni / M_ej) * (eNi - eCo) / eps0
-        heat_ni = ni_scale * heat_ni
+        heat_ni = ni_scale * _radioactive_heating_shape(t_phys, t_gamma)
 
         xi_mag_vals = np.zeros_like(x_vals)
         if x_heat_mag > x_min:
