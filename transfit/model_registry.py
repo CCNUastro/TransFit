@@ -4,6 +4,7 @@ CANONICAL_NICKEL = "nickel"
 CANONICAL_MAGNETAR = "magnetar"
 CANONICAL_MAGNETAR_NI = "magnetar_ni"
 CANONICAL_CSM = "csm"
+CANONICAL_NICKEL_CSM_STAGED = "nickel_csm_staged"
 
 NICKEL_ALIASES = {"ni", "nickel"}
 
@@ -16,6 +17,9 @@ CSM_ALIASES = {"csm", "interaction", "csm_interaction", "csm-interaction"}
 
 def canonical_model_name(model: str, *, warn_legacy: bool = False) -> str:
     m = str(model).strip().lower()
+
+    if m in {"nickel_csm_staged", "nickel-csm-staged", "ni_csm_staged"}:
+        return CANONICAL_NICKEL_CSM_STAGED
 
     if m in NICKEL_ALIASES:
         return CANONICAL_NICKEL
@@ -34,6 +38,8 @@ def canonical_model_name(model: str, *, warn_legacy: bool = False) -> str:
 
 def forward_param_defaults(model: str) -> dict[str, float]:
     m = canonical_model_name(model, warn_legacy=False)
+    if m == CANONICAL_NICKEL_CSM_STAGED:
+        return {"s": 2.0, "eps_rs": 0.0}
     if m == CANONICAL_NICKEL:
         return {"E_Th_in": 0.0, "R_0": 10.0}
     if m == CANONICAL_MAGNETAR:

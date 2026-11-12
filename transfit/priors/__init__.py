@@ -30,6 +30,10 @@ def build_bounds(
         from .csm import default_names_and_bounds
         names, bounds = default_names_and_bounds(include_t_shift=include_t_shift)
 
+    elif m == "nickel_csm_staged":
+        from .nickel_csm import default_names_and_bounds
+        names, bounds = default_names_and_bounds(include_t_shift=include_t_shift)
+
     else:
         raise ValueError(f"Unknown model='{model}' for priors.build_bounds")
 

@@ -304,6 +304,12 @@ def _get_engine(model: str):
         _ENGINE_CACHE[m] = eng
         return eng
 
+    if m == "nickel_csm_staged":
+        from .models.nickel_csm_staged import NickelCSMStagedModel
+        eng = NickelCSMStagedModel()
+        _ENGINE_CACHE[m] = eng
+        return eng
+
     raise ValueError(f"Unknown model='{model}'")
 
 
@@ -372,12 +378,14 @@ _POSITIVE_PARAMS = {
     "R_csm_in",
     "R_csm_out",
     "kappa",
+    "kappa_ej",
+    "kappa_csm",
     "kappa_gamma",
     "T_floor",
     "P_ms",
     "B14",
 }
-_UNIT_INTERVAL_PARAMS = {"eps_sh", "f_ni", "f_mag"}
+_UNIT_INTERVAL_PARAMS = {"eps_sh", "eps_fs", "eps_rs", "f_ni", "f_mag"}
 
 
 def _model_values_from_vector(model: str, model_vector) -> Dict[str, float]:
@@ -871,6 +879,7 @@ def predict_multiband(
 # -------------------------
 
 _DEFAULT_FIXED_MODEL_PARAMS = {
+    "nickel_csm_staged": {"eps_rs": 0.0},
     "magnetar": {"f_mag": 0.2},
     "magnetar_ni": {"f_mag": 0.2},
 }
@@ -1342,6 +1351,7 @@ class _FitLnProb:
     predictor: Callable[[Dict[str, float], np.ndarray], np.ndarray]
     likelihood_y_kind: str
     nuisance_cfgs: Dict[str, Dict[str, Any]]
+    model: str = ""
 
     def __call__(self, sample_vec: np.ndarray) -> float:
         lp = self.prior.lnprior(sample_vec)
@@ -1351,6 +1361,8 @@ class _FitLnProb:
         vals = _param_values_from_sample(sample_vec, self.names_samp, self.fixed)
         lp_phys = _physical_constraints_lnprior(vals)
         if not np.isfinite(lp_phys):
+            return -np.inf
+        if self.model == "nickel_csm_staged" and vals["M_ni"] > vals["M_ej"] * vals["f_ni"]**3:
             return -np.inf
 
         model_params, t_shift = _assemble_model_params_from_values(vals, self.names_all)
@@ -1701,6 +1713,7 @@ def fit_multiband(
         predictor=predictor,
         likelihood_y_kind=ctx.y_kind,
         nuisance_cfgs=nuisance_cfgs,
+        model=model,
     )
 
     samples, logp, meta, sampler_used = _run_sampler(
@@ -1854,6 +1867,7 @@ def fit_bol(
         predictor=predictor,
         likelihood_y_kind="flux",
         nuisance_cfgs=nuisance_cfgs,
+        model=model,
     )
 
     samples, logp, meta, sampler_used = _run_sampler(
